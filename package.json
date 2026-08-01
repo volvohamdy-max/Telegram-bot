@@ -1,0 +1,24 @@
+{
+  "name": "telegram-forex-ai-bot",
+  "version": "1.0.0",
+  "description": "Telegram Forex AI bot built with Node.js, Telegraf, SQLite, and OpenAI-ready services for Termux.",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "db:init": "node src/database/init.js"
+  },
+  "keywords": ["telegram", "telegraf", "forex", "ai", "termux", "sqlite"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "node-cron": "^3.0.3",
+    "telegraf": "^4.16.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
