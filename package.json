@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node --watch src/app.js",
-    "db:init": "node src/database/init.js"
+    "db:init": "node src/database/init.js",
+    "doctor": "node -e \"require('./src/utils/preflight')(); console.log('Doctor check passed')\""
   },
   "keywords": [
     "telegram",

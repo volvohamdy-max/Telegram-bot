@@ -22,6 +22,7 @@ pkg install nodejs git python make clang
 npm install
 cp .env.example .env
 nano .env
+npm run doctor
 npm run db:init
 npm start
 ```
@@ -35,6 +36,24 @@ node app.js
 ```
 
 لا تنسخ ملف `src/app.js` إلى جذر المشروع؛ ملف `app.js` الموجود في الجذر يقوم بتشغيل `src/app.js` تلقائيًا حتى لا تظهر مشكلة `Cannot find module './database/init'`.
+
+## لو البوت مش راضي يشتغل
+
+نفذ الأمر التالي من داخل مجلد المشروع لمعرفة النواقص بسرعة:
+
+```bash
+npm run doctor
+```
+
+لو ظهرت رسالة `مكتبات Node.js ناقصة` فهذا يعني أن `npm install` لم يكتمل أو أنك لست داخل مجلد المشروع الصحيح. نفذ:
+
+```bash
+pkg install nodejs python make clang
+npm install
+npm start
+```
+
+لو ظهرت رسالة `BOT_TOKEN is required` افتح ملف `.env` وضع توكن البوت من BotFather في `BOT_TOKEN`.
 
 ## المتغيرات
 
