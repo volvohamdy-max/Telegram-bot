@@ -55,6 +55,22 @@ npm start
 
 لو ظهرت رسالة `BOT_TOKEN is required` افتح ملف `.env` وضع توكن البوت من BotFather في `BOT_TOKEN`.
 
+### حل خطأ `Cannot find module './database/init'`
+
+هذا الخطأ يعني أن ملف `app.js` الذي يعمل عندك ليس نسخة الجذر الصحيحة، أو أنك نسخت محتوى `src/app.js` إلى ملف `app.js` في جذر المشروع. الحل الأسرع:
+
+```bash
+cat > app.js <<'EOF'
+const runPreflight = require('./src/utils/preflight');
+
+runPreflight();
+require('./src/app');
+EOF
+node app.js
+```
+
+وأضفنا ملفات توافق في الجذر مثل `database/init.js` و`commands/start.js` حتى تعمل النسخ القديمة التي تستدعي المسارات بدون `src/`.
+
 ## المتغيرات
 
 راجع `.env.example` واضبط:
