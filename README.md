@@ -26,6 +26,16 @@ npm run db:init
 npm start
 ```
 
+لو شغلت البوت يدويًا، استخدم أحد الأمرين من داخل مجلد المشروع:
+
+```bash
+npm start
+# أو
+node app.js
+```
+
+لا تنسخ ملف `src/app.js` إلى جذر المشروع؛ ملف `app.js` الموجود في الجذر يقوم بتشغيل `src/app.js` تلقائيًا حتى لا تظهر مشكلة `Cannot find module './database/init'`.
+
 ## المتغيرات
 
 راجع `.env.example` واضبط:
