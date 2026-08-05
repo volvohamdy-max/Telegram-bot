@@ -1,0 +1,7 @@
+.env
+node_modules/
+*.db
+users.db
+__pycache__/
+data/bot.sqlite
+data/bot.sqlite
