@@ -5,3 +5,5 @@ users.db
 __pycache__/
 data/bot.sqlite
 data/bot.sqlite
+src/commands/*.backup
+src/commands/*.sprint*-backup
