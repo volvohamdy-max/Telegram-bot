@@ -1,58 +1,79 @@
 const config = require('../config');
-const { createOrUpdateUser, checkReferralReward } = require('../database/users');
+const {
+  createOrUpdateUser,
+  checkReferralReward,
+  findUser,
+  setLanguage
+} = require('../database/users');
 const { mainKeyboard } = require('../keyboards/main');
+const languageKeyboard = require('../keyboards/language');
 const { requireAdmin } = require('../utils/auth');
 const adminKeyboard = require('../keyboards/admin');
+const { tByLang } = require('../utils/i18n');
+
+async function sendWelcome(ctx, user) {
+  const language = user.language === 'en' ? 'en' : 'ar';
+  const text = tByLang(language);
+  const refLink = `https://t.me/${config.botUsername}?start=${user.referral_code}`;
+
+  return ctx.reply(
+`${text.welcomeTitle(user.first_name)}
+
+${text.welcomeBody}
+
+${text.referralTitle}
+${refLink}
+
+━━━━━━━━━━━━━━
+
+${text.chooseService}`,
+    mainKeyboard(language)
+  );
+}
+
 function registerStart(bot) {
   bot.command('start', async (ctx) => {
-
     const user = createOrUpdateUser(ctx.from, ctx.startPayload);
-if(requireAdmin(ctx, true)){
 
-    return ctx.reply(
-        '👑 لوحة تحكم الأدمن',
-        adminKeyboard()
-    );
+    if (requireAdmin(ctx, true)) {
+      return ctx.reply('👑 لوحة تحكم الأدمن', adminKeyboard());
+    }
 
-}
-const vipReward = checkReferralReward(ctx.from.id);
+    const vipReward = checkReferralReward(ctx.from.id);
 
-if (vipReward) {
-    await ctx.reply(`
+    if (vipReward) {
+      await ctx.reply(`
 🎉 مبروك!
 
 لقد جمعت 200 نقطة من نظام الإحالات.
 
 💎 تم تفعيل اشتراك VIP لمدة 14 يومًا مجانًا.
-
-استمتع بالإشارات الاحترافية 🚀
 `);
-}
-    const refLink =
-      `https://t.me/${config.botUsername}?start=${user.referral_code}`;
+    }
 
-    return ctx.reply(
-`🤖 أهلاً بك ${user.first_name || ''}
+    // New or not-yet-configured user: choose language first.
+    if (!user.language) {
+      return ctx.reply(
+        '🌐 اختر لغتك\nChoose your language',
+        languageKeyboard()
+      );
+    }
 
-مرحباً بك في Forex AI Bot 🚀
+    return sendWelcome(ctx, user);
+  });
 
-✅ تحليل احترافي لـ 10 أزواج فوركس.
-🥇 تحليل الذهب XAUUSD.
-📈 إشارات تلقائية عند ظهور فرص قوية.
-🎯 تحليل بالذكاء الاصطناعي مع نسبة ثقة.
+  bot.action('lang_ar', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = setLanguage(ctx.from.id, 'ar');
+    await ctx.editMessageText('✅ تم اختيار العربية.');
+    return sendWelcome(ctx, user);
+  });
 
-━━━━━━━━━━━━━━
-
-🔗 رابط إحالتك:
-
-${refLink}
-
-━━━━━━━━━━━━━━
-
-اختر الخدمة التي تريدها من القائمة بالأسفل 👇`,
-      mainKeyboard()
-    );
-
+  bot.action('lang_en', async (ctx) => {
+    await ctx.answerCbQuery();
+    const user = setLanguage(ctx.from.id, 'en');
+    await ctx.editMessageText('✅ English selected.');
+    return sendWelcome(ctx, user);
   });
 }
 

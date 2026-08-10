@@ -23,18 +23,41 @@ function createOrUpdateUser(from, startPayload) {
 
     if (referrerCode && referrerCode !== code) {
       const referrer = db.prepare('SELECT * FROM users WHERE referral_code = ?').get(referrerCode);
+
       if (referrer) {
-        db.prepare('INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_points) VALUES (?, ?, ?)')
-          .run(referrer.telegram_id, telegramId, config.referralRewardPoints);
-        db.prepare('UPDATE users SET points = points + ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?')
-          .run(config.referralRewardPoints, referrer.telegram_id);
-checkReferralReward(referrer.telegram_id);
+        db.prepare(`
+          INSERT OR IGNORE INTO referrals (referrer_id, referred_id, reward_points)
+          VALUES (?, ?, ?)
+        `).run(referrer.telegram_id, telegramId, config.referralRewardPoints);
+
+        db.prepare(`
+          UPDATE users
+          SET points = points + ?, updated_at = CURRENT_TIMESTAMP
+          WHERE telegram_id = ?
+        `).run(config.referralRewardPoints, referrer.telegram_id);
+
+        checkReferralReward(referrer.telegram_id);
       }
     }
   } else {
-    db.prepare('UPDATE users SET first_name = ?, username = ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?')
-      .run(from.first_name || '', from.username || '', telegramId);
+    db.prepare(`
+      UPDATE users
+      SET first_name = ?, username = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE telegram_id = ?
+    `).run(from.first_name || '', from.username || '', telegramId);
   }
+
+  return findUser(telegramId);
+}
+
+function setLanguage(telegramId, language) {
+  const normalized = language === 'en' ? 'en' : 'ar';
+
+  db.prepare(`
+    UPDATE users
+    SET language = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id = ?
+  `).run(normalized, String(telegramId));
 
   return findUser(telegramId);
 }
@@ -45,49 +68,56 @@ function countUsers() {
 
 function allUsers(options = {}) {
   if (options.vipOnly) {
-    return db.prepare("SELECT telegram_id FROM users WHERE is_vip = 1 AND (vip_expires_at IS NULL OR vip_expires_at > datetime('now'))").all();
+    return db.prepare(`
+      SELECT telegram_id
+      FROM users
+      WHERE is_vip = 1
+        AND (vip_expires_at IS NULL OR vip_expires_at > datetime('now'))
+    `).all();
   }
+
   return db.prepare('SELECT telegram_id FROM users').all();
 }
+
 function addPoints(telegramId, points) {
+  db.prepare(`
+    UPDATE users
+    SET points = points + ?, updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id = ?
+  `).run(Number(points), String(telegramId));
 
-    db.prepare(
-        'UPDATE users SET points = points + ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?'
-    )
-    .run(Number(points), String(telegramId));
+  const user = findUser(telegramId);
 
+  if (user && user.points >= 200 && user.is_vip !== 1) {
+    addVip(telegramId, 14);
+    db.prepare('UPDATE users SET points = 0 WHERE telegram_id = ?')
+      .run(String(telegramId));
+  }
 
-    const user = findUser(telegramId);
-
-
-    if(user.points >= 200 && user.is_vip !== 1){
-
-        addVip(telegramId, 14);
-
-        db.prepare(
-            'UPDATE users SET points = 0 WHERE telegram_id = ?'
-        )
-        .run(String(telegramId));
-
-    }
-
-
-    return findUser(telegramId);
+  return findUser(telegramId);
 }
+
 function addVip(telegramId, days) {
   const expires = new Date(Date.now() + Number(days) * 24 * 60 * 60 * 1000).toISOString();
-  db.prepare('UPDATE users SET is_vip = 1, vip_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?')
-    .run(expires, String(telegramId));
+
+  db.prepare(`
+    UPDATE users
+    SET is_vip = 1, vip_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id = ?
+  `).run(expires, String(telegramId));
+
   return expires;
 }
 
 function removeVip(telegramId) {
-  db.prepare('UPDATE users SET is_vip = 0, vip_expires_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE telegram_id = ?')
-    .run(String(telegramId));
+  db.prepare(`
+    UPDATE users
+    SET is_vip = 0, vip_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE telegram_id = ?
+  `).run(String(telegramId));
 }
 
 function expireVipUsers() {
-
   const expiredUsers = db.prepare(`
     SELECT telegram_id
     FROM users
@@ -98,68 +128,45 @@ function expireVipUsers() {
 
   db.prepare(`
     UPDATE users
-    SET is_vip = 0,
-        vip_expires_at = NULL
+    SET is_vip = 0, vip_expires_at = NULL
     WHERE is_vip = 1
       AND vip_expires_at IS NOT NULL
       AND vip_expires_at < datetime('now')
   `).run();
 
   return expiredUsers;
-
 }
+
 function checkReferralReward(telegramId) {
+  const user = findUser(telegramId);
+  if (!user || user.points < 200) return false;
 
-    const user = findUser(telegramId);
+  db.prepare('UPDATE users SET points = points - 200 WHERE telegram_id = ?')
+    .run(String(telegramId));
 
-    if (!user) return false;
-
-    if (user.points < 200) return false;
-
-    db.prepare(
-        "UPDATE users SET points = points - 200 WHERE telegram_id = ?"
-    ).run(String(telegramId));
-
-    addVip(telegramId, 14);
-
-    return true;
+  addVip(telegramId, 14);
+  return true;
 }
-function getStats(){
 
-    const total =
-    db.prepare(
-        "SELECT COUNT(*) as c FROM users"
-    ).get().c;
+function getStats() {
+  const total = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+  const vip = db.prepare('SELECT COUNT(*) AS c FROM users WHERE is_vip = 1').get().c;
+  const points = db.prepare('SELECT SUM(points) AS p FROM users').get().p || 0;
 
-
-    const vip =
-    db.prepare(
-        "SELECT COUNT(*) as c FROM users WHERE is_vip = 1"
-    ).get().c;
-
-
-    const points =
-    db.prepare(
-        "SELECT SUM(points) as p FROM users"
-    ).get().p || 0;
-
-
-    return {
-        total,
-        vip,
-        points
-    };
+  return { total, vip, points };
 }
+
 module.exports = {
   referralCode,
   findUser,
   createOrUpdateUser,
+  setLanguage,
   countUsers,
   allUsers,
   addVip,
   removeVip,
   expireVipUsers,
   checkReferralReward,
-  getStats, 
-  addPoints   
+  getStats,
+  addPoints
 };
