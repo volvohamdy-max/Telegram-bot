@@ -31,7 +31,7 @@ if (cached) {
     {
       params: {
         symbol,
-        interval: "5min",
+        interval: "15min",
         outputsize: 50,
         apikey: config.twelveDataKey
       }

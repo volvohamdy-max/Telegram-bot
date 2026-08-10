@@ -19,4 +19,6 @@ module.exports = {
   marketApiUrl: process.env.MARKET_API_URL || '',
 eodhdApiKey: process.env.EODHD_API_KEY || '',
 finnhubKey: process.env.FINNHUB_API_KEY || '',
+mainGroupId: process.env.MAIN_GROUP_ID,
+mainGroupLink: process.env.MAIN_GROUP_LINK,
 };

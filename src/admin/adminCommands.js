@@ -9,6 +9,7 @@ const {
     findUser,
     getStats
 } = require('../database/users');
+const config = require('../config');
 async function sendToAll(ctx, message, vipOnly = false) {
   const users = allUsers({ vipOnly });
   let sent = 0;
@@ -90,9 +91,73 @@ bot.command('addvip', async (ctx) => {
   });
 
 bot.command('signal', async (ctx) => {
-  
-});
 
+    if(!requireAdmin(ctx)) return;
+
+    const text = ctx.message.text.replace('/signal', '').trim();
+
+    if(!text){
+        return ctx.reply(
+            '❌ اكتب الرسالة بعد الأمر\n\nمثال:\n/signal 🚨 إشارة ذهب XAUUSD'
+        );
+    }
+
+
+    const message = `
+${text}
+
+🤖 Telegram Forex AI
+`;
+
+
+    // إرسال للجروب الرئيسي
+    try {
+        await ctx.telegram.sendMessage(
+            config.mainGroupId,
+            message
+        );
+
+        console.log("✅ Signal sent to group");
+
+    } catch(e){
+        console.log("Group signal error:", e.message);
+    }
+
+
+
+    // إرسال لكل أعضاء البوت
+    const users = allUsers();
+
+    for(const user of users){
+
+        try {
+
+            await ctx.telegram.sendMessage(
+                user.telegram_id,
+                message
+            );
+
+        } catch(e){
+
+            console.log(
+                "User send error:",
+                user.telegram_id,
+                e.message
+            );
+
+        }
+
+    }
+
+
+
+    // تأكيد للأدمن
+    return ctx.reply(
+        '✅ تم إرسال الإشارة للجروب وجميع الأعضاء'
+    );
+
+
+});
 
 // هنا ضع الأكواد الجديدة
 

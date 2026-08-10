@@ -31,10 +31,6 @@ initDatabase();
     description: '📋 القائمة الرئيسية'
   },
   {
-    command: 'analyze',
-    description: '📈 تحليل زوج (مثال EURUSD)'
-  },
-  {
     command: 'gold',
     description: '🥇 تحليل الذهب XAUUSD'
   },

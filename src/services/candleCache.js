@@ -6,7 +6,7 @@ function getCache(pair) {
   if (!item) return null;
 
   // صلاحية الكاش 5 دقائق
-  if (Date.now() - item.time > 300000) {
+  if (Date.now() - item.time > 3600000) {
     delete cache[pair];
     return null;
   }
