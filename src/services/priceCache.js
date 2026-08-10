@@ -8,13 +8,19 @@ function setPrice(pair, price) {
 }
 
 function getCachedPrice(pair) {
+    const item = cache[pair];
 
-const CACHE_TIME = 5 * 60 * 1000; // 5 دقائق
+    if (!item) {
+        return null;
+    }
 
-if (Date.now() - item.time > CACHE_TIME) {
-    delete cache[pair];
-    return null;
-}
+    const CACHE_TIME = 5 * 60 * 1000; // 5 دقائق
+
+    if (Date.now() - item.time > CACHE_TIME) {
+        delete cache[pair];
+        return null;
+    }
+
     return item.price;
 }
 

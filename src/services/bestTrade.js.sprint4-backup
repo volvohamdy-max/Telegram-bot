@@ -2,16 +2,99 @@ const { scanMarkets } = require('./smartScanner');
 const { analyzePair } = require('./analysisService');
 const { runSignalLab } = require('./signalLab');
 const { getCandles } = require('./marketService');
-const {
-  calculateTradeLevels,
-  technicalScoreFromAnalysis,
-  calculateFinalScore,
-  getStrength
-} = require('./tradeEngine');
 
 const MIN_FINAL_SCORE = 60;
 const MIN_SMART_SCORE = 55;
 const MIN_AI_CONFIDENCE = 60;
+
+// =====================================================
+// حساب Entry / TP / SL
+// =====================================================
+
+function calculateTradeLevels(candles, direction) {
+    if (!Array.isArray(candles) || candles.length < 10) {
+        return null;
+    }
+
+    const entry = Number(candles[candles.length - 1].close);
+
+    if (!Number.isFinite(entry)) {
+        return null;
+    }
+
+    const previous = candles.slice(-10);
+
+    const ranges = previous
+        .map(c => Number(c.high) - Number(c.low))
+        .filter(Number.isFinite)
+        .filter(value => value > 0);
+
+    if (ranges.length < 5) {
+        return null;
+    }
+
+    const avgRange =
+        ranges.reduce((sum, value) => sum + value, 0) /
+        ranges.length;
+
+    if (!Number.isFinite(avgRange) || avgRange <= 0) {
+        return null;
+    }
+
+    const tp1Distance = avgRange * 1.0;
+    const tp2Distance = avgRange * 1.8;
+    const slDistance = avgRange * 1.0;
+
+    let tp1;
+    let tp2;
+    let sl;
+
+    if (direction === 'BUY') {
+        tp1 = entry + tp1Distance;
+        tp2 = entry + tp2Distance;
+        sl = entry - slDistance;
+    } else if (direction === 'SELL') {
+        tp1 = entry - tp1Distance;
+        tp2 = entry - tp2Distance;
+        sl = entry + slDistance;
+    } else {
+        return null;
+    }
+
+    return {
+        entry,
+        tp1,
+        tp2,
+        sl,
+        avgRange
+    };
+}
+
+
+// =====================================================
+// قوة الصفقة
+// =====================================================
+
+function getStrength(score) {
+    if (score >= 85) {
+        return 'قوية جدًا';
+    }
+
+    if (score >= 75) {
+        return 'قوية';
+    }
+
+    if (score >= 65) {
+        return 'متوسطة';
+    }
+
+    if (score >= 60) {
+        return 'مقبولة';
+    }
+
+    return 'ضعيفة';
+}
+
 
 // =====================================================
 // أفضل صفقة
@@ -344,26 +427,94 @@ async function getBestTrade() {
 
 
             // =============================================
-            // Sprint 4 unified quality score
+            // Final Score
+            //
+            // لو AI موجود:
+            // Smart 50%
+            // AI 30%
+            // Historical 20%
+            //
+            // لو مفيش Historical:
+            // لا نعاقب الصفقة
             // =============================================
-            const technicalScore =
-                technicalScoreFromAnalysis(
-                    analysis,
-                    direction
-                );
 
             let finalScore =
-                calculateFinalScore({
-                    smartScore,
-                    technicalScore,
-                    aiConfidence,
-                    technicalScore,
-                    historicalScore,
-                    similarSetups,
-                    tp1Rate,
-                    slRate,
+                smartScore * 0.50;
+
+
+            if (
+                aiConfidence > 0
+            ) {
+
+                finalScore +=
+                    aiConfidence * 0.30;
+
+            } else {
+
+                // نعطي الجزء غير المستخدم
+                // للـ Smart Score
+                finalScore +=
+                    smartScore * 0.30;
+            }
+
+
+            if (
+                similarSetups > 0
+            ) {
+
+                finalScore +=
+                    historicalScore * 0.20;
+
+
+                // Historical quality bonus
+                if (
+                    tp1Rate >= 60 &&
+                    slRate <= 40
+                ) {
+
+                    finalScore += 5;
+                }
+
+
+                if (
                     labApproved
-                });
+                ) {
+
+                    finalScore += 5;
+                }
+
+
+                // Historical risk penalty
+                if (
+                    slRate > 50
+                ) {
+
+                    finalScore -= 10;
+                }
+
+            } else {
+
+                console.log(
+                    `ℹ️ ${candidate.pair}: no historical data, using technical + AI`
+                );
+            }
+
+
+            // =============================================
+            // تحديد الحد النهائي
+            // =============================================
+
+            finalScore =
+                Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        Math.round(
+                            finalScore
+                        )
+                    )
+                );
+
 
             // =============================================
             // Entry / TP / SL
@@ -430,8 +581,6 @@ async function getBestTrade() {
 
                 smartScore,
 
-                technicalScore,
-
                 confidence:
                     aiConfidence,
 
@@ -464,17 +613,8 @@ async function getBestTrade() {
                 sl:
                     levels.sl,
 
-                atr:
-                    levels.atr,
-
-                riskDistance:
-                    levels.riskDistance,
-
-                rrTp1:
-                    levels.rrTp1,
-
-                rrTp2:
-                    levels.rrTp2,
+                avgRange:
+                    levels.avgRange,
 
                 indicators
             });

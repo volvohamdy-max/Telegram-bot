@@ -261,34 +261,25 @@ ${aiComment}
 function tradeText(ctx, trade) {
   const en = isEnglish(ctx);
   const indicators = trade.indicators || {};
-  const lastPrice = Number(indicators.lastPrice);
+  const entry = Number(trade.entry);
+  const tp1 = Number(trade.tp1);
+  const tp2 = Number(trade.tp2);
+  const sl = Number(trade.sl);
+  const rrTp1 = Number(trade.rrTp1) || 1;
+  const rrTp2 = Number(trade.rrTp2) || 2;
+const action =
+  trade.action === 'BUY'
+    ? '🟢 BUY'
+    : '🔴 SELL';
 
-  // Sprint 2 intentionally keeps the existing trade-level logic unchanged.
-  const entry = Number.isFinite(lastPrice) ? lastPrice : null;
-  const atr = Number(indicators.atr);
-  let tp1 = null;
-  let tp2 = null;
-  let sl = null;
-
-  if (Number.isFinite(entry) && Number.isFinite(atr) && atr > 0) {
-    if (trade.action === 'BUY') {
-      tp1 = entry + atr;
-      tp2 = entry + atr * 1.8;
-      sl = entry - atr;
-    } else {
-      tp1 = entry - atr;
-      tp2 = entry - atr * 1.8;
-      sl = entry + atr;
-    }
-  }
-
-  const action = trade.action === 'BUY' ? '🟢 BUY' : '🔴 SELL';
-  const strength = trade.finalScore >= 85
+const strength =
+  trade.finalScore >= 85
     ? (en ? '🔥 Very strong' : '🔥 قوية جدًا')
     : trade.finalScore >= 75
       ? (en ? '💪 Strong' : '💪 قوية')
-      : (en ? '🟡 Moderate' : '🟡 متوسطة');
-
+      : trade.finalScore >= 65
+        ? (en ? '🟡 Moderate' : '🟡 متوسطة')
+        : (en ? '⚪ Weak' : '⚪ ضعيفة');
   const lang = en ? 'en' : 'ar';
 
   if (en) {
@@ -300,6 +291,8 @@ function tradeText(ctx, trade) {
 📊 QUALITY
 
 ⭐ Smart Score: ${trade.smartScore}/100
+📐 Technical Score: ${trade.technicalScore ?? 'N/A'}/100
+🏆 Final Score: ${trade.finalScore}/100
 🤖 AI Confidence: ${trade.confidence}%
 🧪 Historical Score: ${trade.historicalScore}/100
 📚 Similar Setups: ${trade.similarSetups}
@@ -313,6 +306,7 @@ function tradeText(ctx, trade) {
 🎯 TP1: ${formatPrice(tp1, lang)}
 🏆 TP2: ${formatPrice(tp2, lang)}
 🛑 Stop Loss: ${formatPrice(sl, lang)}
+⚖️ R:R → TP1: 1:${rrTp1} | TP2: 1:${rrTp2}
 
 ━━━━━━━━━━━━━━━━━━
 🔥 Trade strength: ${strength}
@@ -330,6 +324,8 @@ function tradeText(ctx, trade) {
 📊 جودة الفرصة
 
 ⭐ Smart Score: ${trade.smartScore}/100
+📐 Technical Score: ${trade.technicalScore ?? 'N/A'}/100
+🏆 Final Score: ${trade.finalScore}/100
 🤖 AI Confidence: ${trade.confidence}%
 🧪 Historical Score: ${trade.historicalScore}/100
 📚 الحالات المشابهة: ${trade.similarSetups}
@@ -343,6 +339,7 @@ function tradeText(ctx, trade) {
 🎯 TP1: ${formatPrice(tp1, lang)}
 🏆 TP2: ${formatPrice(tp2, lang)}
 🛑 وقف الخسارة: ${formatPrice(sl, lang)}
+⚖️ العائد للمخاطرة → TP1: 1:${rrTp1} | TP2: 1:${rrTp2}
 
 ━━━━━━━━━━━━━━━━━━
 🔥 قوة الصفقة: ${strength}
