@@ -4,7 +4,6 @@ const initDatabase = require('./database/init');
 const db = require('./database/db');
 const registerStart = require('./commands/start');
 const registerUserCommands = require('./commands/user');
-const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
 const startScheduler = require('./services/scheduler');
@@ -41,7 +40,6 @@ async function main() {
 
   registerStart(bot);
   registerSettings(bot);
-  registerAlerts(bot);
   registerUserCommands(bot);
   registerAdminCommands(bot);
 

@@ -3,7 +3,7 @@ const cron = require('node-cron');
 const { expireVipUsers } = require('../database/users');
 const { scanMarket } = require('./autoSignals');
 const { monitorTrades } = require('./tradeMonitor');
-const { runPersonalizedAlerts } = require('./personalizedAlerts');
+const { runSmartScannerAlert } = require('./smartScannerAlert');
 
 const {
     checkEconomicNews,
@@ -181,12 +181,12 @@ cron.schedule('*/5 * * * *', async () => {
     smartAlertRunning = true;
 
     console.log(
-        '🚨 PERSONALIZED SMART ALERT TRIGGERED'
+        '🚨 SMART SCANNER AUTO ALERT TRIGGERED'
     );
 
     try {
 
-        await runPersonalizedAlerts(bot);
+        await runSmartScannerAlert(bot);
 
         console.log(
             '✅ Smart Scanner Alert finished'

@@ -78,28 +78,6 @@ function initDatabase() {
       alert_sent INTEGER DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
-
-    CREATE TABLE IF NOT EXISTS alert_preferences (
-      telegram_id TEXT PRIMARY KEY,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      min_confidence INTEGER NOT NULL DEFAULT 80,
-      pairs TEXT NOT NULL DEFAULT '["XAUUSD","BTCUSD","EURUSD","GBPUSD","USDJPY","EURJPY","GBPJPY","CHFJPY"]',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
-    CREATE TABLE IF NOT EXISTS alert_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      telegram_id TEXT NOT NULL,
-      pair TEXT NOT NULL,
-      action TEXT NOT NULL,
-      score INTEGER,
-      confidence INTEGER,
-      sent_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_alert_history_lookup
-      ON alert_history (telegram_id, pair, action, sent_at);
   `);
 
   // Safe migration for existing databases.
