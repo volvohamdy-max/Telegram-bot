@@ -903,12 +903,31 @@ More alert controls will be added soon.`
     keyboard(ctx)
   );
 });
-  bot.hears('🎧 الدعم', (ctx) => {
+  bot.hears(['🎧 الدعم', '🎧 Support'], (ctx) => {
+    const en = isEnglish(ctx);
+
     return ctx.reply(
-      isEnglish(ctx)
-        ? '📩 Technical support:\n@Axiomiexfx_support'
-        : '📩 الدعم الفني:\n@Axiomiexfx_support',
-      keyboard(ctx)
+      en
+        ? `🎧 FOREX AI SUPPORT
+
+Choose how you would like to continue:`
+        : `🎧 دعم FOREX AI
+
+اختر وسيلة التواصل:`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.url(
+            en ? '💬 Technical Support' : '💬 الدعم الفني',
+            'https://t.me/Axiomiexfx_support'
+          )
+        ],
+        [
+          Markup.button.url(
+            en ? '👥 Main Group' : '👥 الجروب الرئيسي',
+            'https://t.me/forexaichannel'
+          )
+        ]
+      ])
     );
   });
 
