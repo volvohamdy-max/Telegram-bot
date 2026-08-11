@@ -4,12 +4,15 @@ const initDatabase = require('./database/init');
 const db = require('./database/db');
 const registerStart = require('./commands/start');
 const registerUserCommands = require('./commands/user');
+const registerPerformance = require('./commands/performance');
 const registerSlashCommands = require('./commands/slashCommands');
 const registerMarketMap = require('./commands/marketMap');
 const registerTrendHunter = require('./commands/trendHunter');
 const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
+const { registerAdminV21 } = require('./admin/adminControlCenterV21');
+const { getBoolSetting: getAdminBoolSetting } = require('./database/adminControl');
 const startScheduler = require('./services/scheduler');
 const { startBreakingNews } = require('./services/breakingNewsService');
 const { startAutoTrendHunter } = require('./services/trendHunterAuto');
@@ -40,6 +43,7 @@ async function main() {
     { command: 'gold', description: '🥇 XAUUSD analysis / تحليل الذهب' },
     { command: 'news', description: '📰 Economic news / الأخبار' },
     { command: 'alerts', description: '🔔 Alerts / التنبيهات' },
+    { command: 'performance', description: '📊 Performance / الأداء' },
     { command: 'status', description: '👤 Account / الحساب' },
     { command: 'ref', description: '🔗 Referral / الإحالة' },
     { command: 'vip', description: '💎 VIP' },
@@ -47,6 +51,19 @@ async function main() {
   ]);
 
   console.log('Commands menu set');
+
+  bot.use(async (ctx, next) => {
+    const maintenance = getAdminBoolSetting('maintenance_mode', false);
+    const isAdmin = (config.adminIds || [])
+      .map(String)
+      .includes(String(ctx.from?.id));
+
+    if (maintenance && !isAdmin) {
+      return ctx.reply('🛠️ FOREX AI تحت الصيانة حاليًا. حاول مرة أخرى بعد قليل.\n\nMaintenance Mode is active.');
+    }
+
+    return next();
+  });
 
   // Must run before text handlers.
   bot.use(languageRouter());
@@ -58,7 +75,9 @@ async function main() {
   registerMarketMap(bot);
   registerSlashCommands(bot);
   registerUserCommands(bot);
+  registerPerformance(bot);
   registerAdminCommands(bot);
+  registerAdminV21(bot);
 
   console.log('Commands are registered.');
 

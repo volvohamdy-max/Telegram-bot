@@ -1,4 +1,4 @@
-const adminKeyboard = require('../keyboards/admin');
+const { adminV21Keyboard } = require('../keyboards/adminV21');
 const { requireAdmin } = require('../utils/auth');
 const {
     countUsers,
@@ -27,7 +27,7 @@ async function sendToAll(ctx, message, vipOnly = false) {
 function registerAdminCommands(bot) {
   bot.command('admin', (ctx) => {
     if (!requireAdmin(ctx)) return;
-    return ctx.reply('لوحة الأدمن', adminKeyboard());
+    return ctx.reply('🎛️ FOREX AI — Admin Control Center V2.1', adminV21Keyboard());
   }); 
 bot.action('admin_stats', (ctx) => {
 

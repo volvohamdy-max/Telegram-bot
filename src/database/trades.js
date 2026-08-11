@@ -26,9 +26,13 @@ function addTrade(data) {
 }
 
 function getOpenTrades() {
-  return db.prepare(
-    "SELECT * FROM trades WHERE status = 'open'"
-  ).all();
+    return db.prepare(`
+        SELECT *
+        FROM trades
+        WHERE pair = 'XAUUSD'
+          AND status IN ('open', 'target1')
+        ORDER BY id DESC
+    `).all();
 }
 function updateTradeStatus(id, status) {
     return db.prepare(

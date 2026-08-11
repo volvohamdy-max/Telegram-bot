@@ -2,18 +2,29 @@ const { analyzePair } = require('./analysisGate');
 const { allUsers } = require('../database/users');
 const { addTrade } = require('../database/trades');
 const { getLivePrice } = require('./priceService');
+const { getCandles } = require('./marketService');
+const { calculateTradeLevels } = require('./tradeEngine');
 const { saveSignal } = require('./signalCache');
+const { evaluateScalpEntry } = require('./scalpingEntryEngine');
 const config = require('../config');
+const {
+  getBoolSetting,
+  getNumberSetting
+} = require('../database/adminControl');
 const PAIRS = [
   
   "XAUUSD"
 ];
 
 let lastSignals = {};
-const scanStart = Date.now();
 
-console.log("🚀 SCAN START:", new Date().toLocaleTimeString());
 async function scanMarket(bot) {
+  if (!getBoolSetting('auto_signals_enabled', true)) {
+    console.log('⏸️ Auto Signals disabled from Admin Control Center');
+    return;
+  }
+  const scanStart = Date.now();
+  console.log("🚀 SCAN START:", new Date().toLocaleTimeString());
 console.log("🚨 AUTO SIGNALS FILE IS RUNNING");
   console.log("🔍 Scanning Market...");
 
@@ -33,7 +44,6 @@ console.log(
 );
 
 saveSignal(pair, result);
-      saveSignal(pair, result);
       console.log("AI RESULT:", pair, result);
 
       if (!result.signal) continue;
@@ -41,28 +51,87 @@ if (
   result.signal.action !== "BUY" &&
   result.signal.action !== "SELL"
 ) continue;
-      if (result.signal.confidence < 53) continue;
+      const confidence = Number(result.signal.confidence);
+
+      if (!Number.isFinite(confidence)) {
+        console.log(`❌ Invalid AI confidence: ${pair}`);
+        continue;
+      }
+
+      const minAiConfidence = getNumberSetting('min_ai_confidence', 60);
+
+      if (confidence < minAiConfidence) {
+        console.log(
+          `❌ Auto signal rejected: ${pair} confidence ${confidence}% < ${minAiConfidence}%`
+        );
+        continue;
+      }
+
+      const candles = await getCandles(pair);
+
+      const levels = calculateTradeLevels(
+        candles,
+        result.signal.action,
+        pair
+      );
+
+      if (!levels) {
+        console.log(
+          `❌ Auto signal rejected: ${pair} invalid Smart TP/SL levels`
+        );
+        continue;
+      }
+
+      if (
+        pair === 'XAUUSD' &&
+        Number(levels.riskPct) >
+        getNumberSetting('gold_max_risk_pct', 0.35)
+      ) {
+        console.log(
+          `❌ Auto signal rejected: ${pair} stop too wide for scalp (${Number(levels.riskPct).toFixed(2)}%)`
+        );
+        continue;
+      }
+
+      // AUTO SCALP ENTRY
+      const scalpEntry = await evaluateScalpEntry(
+        pair,
+        result.signal.action,
+        result.indicators
+      );
+
+      if (scalpEntry.status !== 'ENTRY_READY') {
+        console.log(
+          `❌ AUTO SCALP ENTRY rejected ${pair}: ${scalpEntry.status} / ${scalpEntry.reason}`
+        );
+        continue;
+      }
+
+      console.log(
+        `✅ AUTO SCALP ENTRY READY ${pair} | 5M=${scalpEntry.trigger5m}`
+      );
 
       const key =
         pair +
         result.signal.action +
-        result.signal.entry;
+        Number(levels.entry).toFixed(2);
 
       if (lastSignals[pair] === key)
         continue;
 
       lastSignals[pair] = key;
-// حفظ الصفقة في قاعدة البيانات
-addTrade({
-  telegram_id: "VIP",
-  pair: pair,
-  action: result.signal.action,
-  entry: result.signal.entry,
-  stop_loss: result.signal.stopLoss,
-  target1: result.signal.targets[0],
-  target2: result.signal.targets[1] || null
-});
-const livePrice = Number(result.signal.entry);
+
+      addTrade({
+        telegram_id: "VIP",
+        pair: pair,
+        action: result.signal.action,
+        entry: levels.entry,
+        stop_loss: levels.sl,
+        target1: levels.tp1,
+        target2: levels.tp2
+      });
+
+      const livePrice = Number(levels.entry);
 
 // عرض منطقة الدخول حسب ATR
 // قيمة ATR الحالية
@@ -103,19 +172,26 @@ const message = `
 ${entryFrom.toFixed(2)} ➜ ${entryTo.toFixed(2)}
 
 🛑 وقف الخسارة
-${result.signal.stopLoss}
+${Number(levels.sl).toFixed(2)}
 
 🎯 الهدف الأول
-${result.signal.targets[0]}
+${Number(levels.tp1).toFixed(2)}
 
 🎯 الهدف الثاني
-${result.signal.targets[1] || "-"}
+${Number(levels.tp2).toFixed(2)}
 
 🔥 الثقة
 ${result.signal.confidence}%
 
 📊 ATR
 ${atr.toFixed(2)}
+
+⚖️ العائد للمخاطرة
+TP1 → 1:${levels.rrTp1}
+TP2 → 1:${levels.rrTp2}
+
+📏 مسافة وقف الخسارة
+${Number(levels.riskDistance).toFixed(2)}
 `;
 const users = allUsers();
 

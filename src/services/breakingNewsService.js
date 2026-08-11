@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { allUsers } = require('../database/users');
 const db = require('../database/db');
 const config = require('../config');
+const { getBoolSetting } = require('../database/adminControl');
 
 const DEFAULT_CHANNELS = [
   'https://t.me/s/ForexBreakingNews',
@@ -479,6 +480,10 @@ async function fetchChannel(url) {
 }
 
 async function checkBreakingNews(bot) {
+  if (!getBoolSetting('breaking_news_enabled', true)) {
+    console.log('⏸️ Breaking News disabled from Admin Control Center');
+    return;
+  }
   for (const url of channels()) {
     try {
       const posts = await fetchChannel(url);

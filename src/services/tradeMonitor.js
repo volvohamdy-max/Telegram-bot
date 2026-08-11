@@ -1,6 +1,12 @@
 
 const { getPrice } = require('./marketService');
 const { getOpenTrades, updateTradeStatus } = require('../database/trades');
+const {
+    ensureTradeTracked,
+    recordTp1,
+    recordTp2,
+    recordSl
+} = require('../database/performance');
 const { allUsers } = require('../database/users');
 const { getCachedPrice, setPrice } = require('./priceCache');
 const config = require('../config');
@@ -24,6 +30,8 @@ async function monitorTrades(bot) {
         }
 
         try {
+            ensureTradeTracked(trade);
+
             let price = getCachedPrice('XAUUSD');
 
             if (price === null || price === undefined) {
@@ -43,6 +51,7 @@ async function monitorTrades(bot) {
 
             let message = null;
             let newStatus = null;
+            let resultType = null;
 
             // =========================
             // BUY
@@ -75,6 +84,7 @@ ${trade.target2}
 ✅ الصفقة حققت الهدف الثاني بنجاح 🎉`;
 
                     newStatus = 'closed';
+                    resultType = 'TP2';
                 }
 
                 // TP1
@@ -103,6 +113,7 @@ ${trade.target2 || '-'}
 ✅ الصفقة في ربح 🎉`;
 
                     newStatus = 'target1';
+                    resultType = 'TP1';
                 }
 
                 // SL
@@ -127,6 +138,7 @@ ${trade.stop_loss}
 ❌ انتهت الصفقة عند وقف الخسارة.`;
 
                     newStatus = 'closed';
+                    resultType = 'SL';
                 }
             }
 
@@ -161,6 +173,7 @@ ${trade.target2}
 ✅ الصفقة حققت الهدف الثاني بنجاح 🎉`;
 
                     newStatus = 'closed';
+                    resultType = 'TP2';
                 }
 
                 // TP1
@@ -189,6 +202,7 @@ ${trade.target2 || '-'}
 ✅ الصفقة في ربح 🎉`;
 
                     newStatus = 'target1';
+                    resultType = 'TP1';
                 }
 
                 // SL
@@ -230,6 +244,25 @@ ${trade.stop_loss}
             // =========================
 
             if (message && newStatus) {
+
+                // Fallback detection protects older formatting branches.
+                if (!resultType) {
+                    if (message.includes('الهدف الثاني')) {
+                        resultType = 'TP2';
+                    } else if (message.includes('الهدف الأول')) {
+                        resultType = 'TP1';
+                    } else if (message.includes('وقف الخسارة')) {
+                        resultType = 'SL';
+                    }
+                }
+
+                if (resultType === 'TP1') {
+                    recordTp1(trade, price);
+                } else if (resultType === 'TP2') {
+                    recordTp2(trade, price);
+                } else if (resultType === 'SL') {
+                    recordSl(trade, price);
+                }
 
                 updateTradeStatus(
                     trade.id,
@@ -293,7 +326,7 @@ ${trade.stop_loss}
         } catch (err) {
             console.log(
                 `❌ Trade monitor error: ${trade.pair}`,
-                err.message
+                err.stack || err
             );
         }
     }

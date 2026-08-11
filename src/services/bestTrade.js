@@ -113,6 +113,31 @@ async function getBestTrade() {
 
     for (const candidate of candidates) {
 
+        // =============================================
+        // SCALPING 5M SAFETY
+        // Best Trade requires a real 5M ENTRY_READY
+        // =============================================
+
+        if (
+            candidate.action !== 'BUY' &&
+            candidate.action !== 'SELL'
+        ) {
+            console.log(
+                `🟡 SCALP WAIT candidate skipped: ${candidate.pair}`
+            );
+            continue;
+        }
+
+        if (
+            !candidate.scalpEntry ||
+            candidate.scalpEntry.status !== 'ENTRY_READY'
+        ) {
+            console.log(
+                `❌ 5M entry confirmation missing: ${candidate.pair} / ${candidate.scalpEntry?.status || 'NONE'}`
+            );
+            continue;
+        }
+
         try {
 
             console.log(
@@ -286,6 +311,130 @@ async function getBestTrade() {
                 continue;
             }
 
+
+            // =============================================
+            // TECHNICAL SCORE
+            // =============================================
+
+            const direction = scannerDirection;
+
+            const technicalScore =
+                technicalScoreFromAnalysis(
+                    analysis,
+                    direction
+                );
+
+            // =============================================
+            // SIGNAL LAB / HISTORICAL PERFORMANCE
+            // =============================================
+
+            let historicalScore = 0;
+            let similarSetups = 0;
+            let tp1Rate = 0;
+            let tp2Rate = 0;
+            let slRate = 0;
+            let labApproved = false;
+
+            try {
+                const lab =
+                    await runSignalLab(
+                        candidate.pair,
+                        direction
+                    );
+
+                if (lab) {
+                    historicalScore =
+                        Number(
+                            lab.historicalScore ??
+                            lab.score ??
+                            0
+                        ) || 0;
+
+                    similarSetups =
+                        Number(
+                            lab.similarSetups ??
+                            lab.total ??
+                            0
+                        ) || 0;
+
+                    tp1Rate =
+                        Number(
+                            lab.tp1Rate ??
+                            lab.tp1SuccessRate ??
+                            0
+                        ) || 0;
+
+                    tp2Rate =
+                        Number(
+                            lab.tp2Rate ??
+                            lab.tp2SuccessRate ??
+                            0
+                        ) || 0;
+
+                    slRate =
+                        Number(
+                            lab.slRate ??
+                            lab.stopLossRate ??
+                            0
+                        ) || 0;
+
+                    labApproved =
+                        Boolean(
+                            lab.approved ??
+                            lab.labApproved ??
+                            false
+                        );
+                }
+
+            } catch (labError) {
+
+                console.log(
+                    `⚠️ Signal Lab unavailable ${candidate.pair}:`,
+                    labError.message
+                );
+            }
+
+            // =============================================
+            // SMART TP / SL
+            // =============================================
+
+            const candles =
+                await getCandles(
+                    candidate.pair,
+                    '15min'
+                );
+
+            const levels =
+                calculateTradeLevels(
+                    candles,
+                    direction,
+                    candidate.pair
+                );
+
+            if (!levels) {
+
+                console.log(
+                    `❌ Invalid trade levels: ${candidate.pair}`
+                );
+
+                continue;
+            }
+
+            // =============================================
+            // FINAL SCORE
+            // =============================================
+
+            const finalScore =
+                calculateFinalScore({
+                    smartScore,
+                    aiConfidence,
+                    technicalScore,
+                    historicalScore,
+                    similarSetups,
+                    tp1Rate,
+                    slRate,
+                    labApproved
+                });
 
             // =============================================
             // قوة الصفقة

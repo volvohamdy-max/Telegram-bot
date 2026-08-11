@@ -1,4 +1,5 @@
 const { analyzePair } = require('./analysisGate');
+const { evaluateScalpEntry } = require('./scalpingEntryEngine');
 
 const SCANNER_PAIRS = [
     'XAUUSD',
@@ -391,7 +392,7 @@ async function scanMarkets() {
                 score,
 
                 confidence,
-
+                scalpEntry: null,
                 indicators
 
             });
@@ -410,6 +411,152 @@ async function scanMarkets() {
             console.log(
                 `❌ Scanner error ${pair}:`,
                 error.message
+            );
+        }
+    }
+
+
+    // =====================================================
+    // TWO-STAGE SCALPING 5M SELECTION
+    // Stage 1: all pairs on 15M
+    // Stage 2: XAUUSD + best 2 actionable candidates on 5M
+    // =====================================================
+
+    const actionable = results
+        .filter(
+            (row) =>
+                (row.action === 'BUY' ||
+                 row.action === 'SELL') &&
+                Number(row.confidence) >= 60
+        )
+        .sort(
+            (a, b) =>
+                Number(b.score || 0) -
+                Number(a.score || 0)
+        );
+
+    const selectedPairs = new Set();
+
+    for (const row of actionable) {
+        if (selectedPairs.size >= 3) break;
+        selectedPairs.add(row.pair);
+    }
+
+    console.log(
+        '⚡ 5M SCALP BUDGET:',
+        [...selectedPairs]
+    );
+
+    for (const row of results) {
+        if (
+            row.action !== 'BUY' &&
+            row.action !== 'SELL'
+        ) {
+            row.scalpEntry = {
+                status: 'NOT_APPLICABLE',
+                reason: 'NO_ACTION'
+            };
+            continue;
+        }
+
+        if (!selectedPairs.has(row.pair)) {
+            row.scalpEntry = {
+                status: 'NOT_CHECKED',
+                reason: '5M_BUDGET'
+            };
+
+            // Keep it visible in Market Map,
+            // but never let an unchecked setup look premium.
+            row.score = Math.min(
+                Number(row.score || 0),
+                64
+            );
+
+            console.log(
+                `🟦 5M skipped ${row.pair}: budget optimization`
+            );
+
+            continue;
+        }
+
+        try {
+            const scalpEntry =
+                await evaluateScalpEntry(
+                    row.pair,
+                    row.action,
+                    row.indicators
+                );
+
+            row.scalpEntry = scalpEntry;
+
+            row.score = Math.max(
+                0,
+                Math.min(
+                    100,
+                    Number(row.score || 0) +
+                    Number(
+                        scalpEntry.scoreAdjustment || 0
+                    )
+                )
+            );
+
+            if (scalpEntry.status === 'REJECT') {
+                console.log(
+                    `❌ SCALP ENTRY REJECTED ${row.pair}: ${scalpEntry.reason}`
+                );
+
+                row.action = 'WAIT';
+                row.score = Math.min(
+                    row.score,
+                    35
+                );
+            } else if (
+                scalpEntry.status ===
+                'WAIT_PULLBACK'
+            ) {
+                console.log(
+                    `🟡 WAIT PULLBACK ${row.pair}: ${scalpEntry.reason}`
+                );
+
+                row.action = 'WAIT';
+                row.score = Math.min(
+                    row.score,
+                    45
+                );
+            } else if (
+                scalpEntry.status === 'WAIT'
+            ) {
+                console.log(
+                    `🟡 SCALP WAIT ${row.pair}: ${scalpEntry.reason}`
+                );
+
+                row.action = 'WAIT';
+                row.score = Math.min(
+                    row.score,
+                    55
+                );
+            } else if (
+                scalpEntry.status ===
+                'ENTRY_READY'
+            ) {
+                console.log(
+                    `✅ SCALP ENTRY READY ${row.pair} | 5M=${scalpEntry.trigger5m}`
+                );
+            }
+        } catch (error) {
+            row.scalpEntry = {
+                status: 'ERROR',
+                reason: error.message
+            };
+
+            row.action = 'WAIT';
+            row.score = Math.min(
+                Number(row.score || 0),
+                35
+            );
+
+            console.log(
+                `⚠️ 5M scalp check failed ${row.pair}: ${error.message}`
             );
         }
     }
