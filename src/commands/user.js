@@ -1,6 +1,15 @@
+const { tByLang } = require('../utils/i18n');
 const config = require('../config');
 const { findUser } = require('../database/users');
-const { vipKeyboard, mainKeyboard } = require('../keyboards/main');
+const {
+  mainKeyboard,
+  marketKeyboard,
+  alertsKeyboard,
+  accountKeyboard,
+  moreKeyboard,
+  settingsKeyboard,
+  vipKeyboard
+} = require('../keyboards/main');
 const { plans, createVipRequest } = require('../services/vipService');
 const { analyzePair } = require('../services/analysisService');
 const { scanMarkets } = require('../services/smartScanner');
@@ -561,6 +570,40 @@ ${messages.join('\n━━━━━━━━━━━━━━━━━━\n\n')}
 }
 
 function registerUserCommands(bot) {
+
+  // MENU_UX_V3_HANDLERS
+  bot.hears(['📊 السوق', '📊 Markets'], (ctx) => {
+    const lang = isEnglish(ctx) ? 'en' : 'ar';
+    const locale = tByLang(lang);
+    return ctx.reply(locale.marketMenuTitle, marketKeyboard(lang));
+  });
+
+  bot.hears(['🔔 مركز التنبيهات', '🔔 Alerts Center'], (ctx) => {
+    const lang = isEnglish(ctx) ? 'en' : 'ar';
+    const locale = tByLang(lang);
+    return ctx.reply(locale.alertsMenuTitle, alertsKeyboard(lang));
+  });
+
+  bot.hears(['👤 الحساب', '👤 Account'], (ctx) => {
+    const lang = isEnglish(ctx) ? 'en' : 'ar';
+    const locale = tByLang(lang);
+    return ctx.reply(locale.accountMenuTitle, accountKeyboard(lang));
+  });
+
+  bot.hears(['⚙️ المزيد', '⚙️ More'], (ctx) => {
+    const lang = isEnglish(ctx) ? 'en' : 'ar';
+    const locale = tByLang(lang);
+    return ctx.reply(locale.moreMenuTitle, moreKeyboard(lang));
+  });
+
+  bot.hears(['🔙 رجوع', '🔙 Back'], (ctx) => {
+    const lang = isEnglish(ctx) ? 'en' : 'ar';
+    return ctx.reply(
+      isEnglish(ctx) ? '📋 Main menu' : '📋 القائمة الرئيسية',
+      mainKeyboard(lang)
+    );
+  });
+
   bot.command('status', (ctx) => {
     const user = findUser(ctx.from.id);
     if (!user) {

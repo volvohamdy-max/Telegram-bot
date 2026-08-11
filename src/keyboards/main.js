@@ -5,13 +5,48 @@ const mainKeyboard = (language = 'ar') => {
   const { buttons } = tByLang(language);
 
   return Markup.keyboard([
-    [buttons.tradeNow, buttons.scanner],
-    [buttons.trendHunter],
-    [buttons.marketMap],
-    [buttons.analysis, buttons.signalLab],
-    [buttons.vip, buttons.account],
-    [buttons.referral, buttons.alerts],
-    [buttons.support, buttons.settings]
+    [buttons.tradeNow, buttons.bestOpportunity],
+    [buttons.marketCenter, buttons.alertsCenter],
+    [buttons.accountCenter, buttons.more]
+  ]).resize();
+};
+
+const marketKeyboard = (language = 'ar') => {
+  const { buttons } = tByLang(language);
+
+  return Markup.keyboard([
+    [buttons.scanner, buttons.marketMap],
+    [buttons.trendHunter, buttons.analysis],
+    [buttons.signalLab],
+    [buttons.back]
+  ]).resize();
+};
+
+const alertsKeyboard = (language = 'ar') => {
+  const { buttons } = tByLang(language);
+
+  return Markup.keyboard([
+    [buttons.alerts],
+    [buttons.back]
+  ]).resize();
+};
+
+const accountKeyboard = (language = 'ar') => {
+  const { buttons } = tByLang(language);
+
+  return Markup.keyboard([
+    [buttons.account, buttons.vip],
+    [buttons.referral, buttons.language],
+    [buttons.back]
+  ]).resize();
+};
+
+const moreKeyboard = (language = 'ar') => {
+  const { buttons } = tByLang(language);
+
+  return Markup.keyboard([
+    [buttons.support, buttons.settings],
+    [buttons.back]
   ]).resize();
 };
 
@@ -33,6 +68,10 @@ const vipKeyboard = () =>
 
 module.exports = {
   mainKeyboard,
+  marketKeyboard,
+  alertsKeyboard,
+  accountKeyboard,
+  moreKeyboard,
   settingsKeyboard,
   vipKeyboard
 };
