@@ -100,17 +100,6 @@ function initDatabase() {
 
     CREATE INDEX IF NOT EXISTS idx_alert_history_lookup
       ON alert_history (telegram_id, pair, action, sent_at);
-
-    CREATE TABLE IF NOT EXISTS trend_watches (
-      telegram_id TEXT NOT NULL,
-      pair TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (telegram_id, pair)
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_trend_watches_pair
-      ON trend_watches (pair);
-
   `);
 
   // Safe migration for existing databases.

@@ -4,132 +4,96 @@ const { calculateTradeLevels } = require('./tradeEngine');
 
 const PAIRS = ['XAUUSD','BTCUSD','EURUSD','GBPUSD','USDJPY','EURJPY','GBPJPY','CHFJPY'];
 
-function clamp(n, min = 0, max = 100) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return min;
-  return Math.max(min, Math.min(max, v));
-}
+function clamp(n,min=0,max=100){const v=Number(n);return Number.isFinite(v)?Math.max(min,Math.min(max,v)):min;}
 
-function getDirection(indicators) {
-  const ema20 = Number(indicators?.ema20);
-  const ema50 = Number(indicators?.ema50);
-  const macd = Number(indicators?.macd?.macd);
-  const signal = Number(indicators?.macd?.signal);
-  if ([ema20, ema50, macd, signal].every(Number.isFinite)) {
-    if (ema20 > ema50 && macd > signal) return 'BUY';
-    if (ema20 < ema50 && macd < signal) return 'SELL';
+function directionOf(i){
+  const e20=Number(i?.ema20), e50=Number(i?.ema50);
+  const m=Number(i?.macd?.macd), s=Number(i?.macd?.signal);
+  if([e20,e50,m,s].every(Number.isFinite)){
+    if(e20>e50 && m>s) return 'BUY';
+    if(e20<e50 && m<s) return 'SELL';
   }
   return 'WAIT';
 }
 
-function scoreTrend({ indicators, analysis, direction }) {
-  const ema20 = Number(indicators?.ema20);
-  const ema50 = Number(indicators?.ema50);
-  const rsi = Number(indicators?.rsi);
-  const adx = Number(indicators?.adx);
-  const macd = Number(indicators?.macd?.macd);
-  const macdSignal = Number(indicators?.macd?.signal);
-  const aiConfidence = clamp(analysis?.signal?.confidence);
-  let score = 0;
-
-  if (direction === 'BUY' && ema20 > ema50) score += 25;
-  if (direction === 'SELL' && ema20 < ema50) score += 25;
-  if (direction === 'BUY' && macd > macdSignal) score += 20;
-  if (direction === 'SELL' && macd < macdSignal) score += 20;
-
-  if (Number.isFinite(adx)) {
-    if (adx >= 35) score += 25;
-    else if (adx >= 30) score += 22;
-    else if (adx >= 25) score += 18;
-    else if (adx >= 20) score += 10;
-  }
-
-  if (Number.isFinite(rsi)) {
-    if (direction === 'BUY') {
-      if (rsi >= 52 && rsi <= 66) score += 15;
-      else if (rsi > 50 && rsi < 70) score += 10;
-      else if (rsi >= 70) score += 3;
-    } else if (direction === 'SELL') {
-      if (rsi >= 34 && rsi <= 48) score += 15;
-      else if (rsi > 30 && rsi < 50) score += 10;
-      else if (rsi <= 30) score += 3;
-    }
-  }
-
-  const aiAction = String(analysis?.signal?.action || '').toUpperCase();
-  if (aiAction === direction) {
-    if (aiConfidence >= 85) score += 15;
-    else if (aiConfidence >= 75) score += 12;
-    else if (aiConfidence >= 65) score += 8;
-    else if (aiConfidence >= 60) score += 5;
-  }
-
-  return Math.round(clamp(score));
-}
-
-function classify({ indicators, analysis, direction, score }) {
-  const adx = Number(indicators?.adx);
-  const rsi = Number(indicators?.rsi);
-  const aiAction = String(analysis?.signal?.action || '').toUpperCase();
-  const aiConfidence = Number(analysis?.signal?.confidence) || 0;
-
-  if (direction === 'WAIT' || !Number.isFinite(adx) || adx < 20) return 'NO_TREND';
-
-  const overheated =
-    (direction === 'BUY' && Number.isFinite(rsi) && rsi >= 68) ||
-    (direction === 'SELL' && Number.isFinite(rsi) && rsi <= 32);
-  if (overheated && score >= 65) return 'WAIT_PULLBACK';
-
-  const rsiReady = direction === 'BUY'
-    ? Number.isFinite(rsi) && rsi >= 52 && rsi <= 66
-    : Number.isFinite(rsi) && rsi >= 34 && rsi <= 48;
-
-  const aiReady = aiAction === direction && aiConfidence >= 70 && !analysis?.aiDirectionMismatch;
-
-  if (score >= 78 && adx >= 25 && rsiReady && aiReady) return 'ENTRY_READY';
-  if (score >= 65) return 'TREND_FOUND';
-  return 'NO_TREND';
-}
-
-async function analyzeTrend(pair) {
-  const analysis = await analyzePair(pair);
-  if (!analysis || !analysis.indicators) return { pair, direction: 'WAIT', status: 'NO_DATA', score: 0 };
-
-  const indicators = analysis.indicators;
-  const direction = getDirection(indicators);
-  const score = scoreTrend({ indicators, analysis, direction });
-  const status = classify({ indicators, analysis, direction, score });
-  let levels = null;
-
-  if (status === 'ENTRY_READY') {
-    try {
-      const candles = await getCandles(pair);
-      levels = calculateTradeLevels(candles, direction);
-    } catch (error) {
-      console.log(`⚠️ Trend Hunter levels ${pair}:`, error.message);
-    }
-  }
+function evidence(i,a,d){
+  const e20=Number(i?.ema20),e50=Number(i?.ema50),rsi=Number(i?.rsi),adx=Number(i?.adx);
+  const macd=Number(i?.macd?.macd),sig=Number(i?.macd?.signal);
+  const aiAction=String(a?.signal?.action||'').toUpperCase();
+  const aiConfidence=Number(a?.signal?.confidence)||0;
 
   return {
-    pair, direction, status, score,
-    aiConfidence: Number(analysis?.signal?.confidence) || 0,
-    adx: Number(indicators?.adx),
-    rsi: Number(indicators?.rsi),
-    levels
+    emaAligned: d==='BUY'?e20>e50:d==='SELL'?e20<e50:false,
+    macdAligned: d==='BUY'?macd>sig:d==='SELL'?macd<sig:false,
+    adxReady: Number.isFinite(adx)&&adx>=25,
+    rsiReady: d==='BUY'?(rsi>=52&&rsi<=66):d==='SELL'?(rsi>=34&&rsi<=48):false,
+    aiReady: aiAction===d&&aiConfidence>=70&&!a?.aiDirectionMismatch,
+    overheated: d==='BUY'?rsi>=68:d==='SELL'?rsi<=32:false
   };
 }
 
-async function scanTrends() {
-  const results = [];
-  for (const pair of PAIRS) {
-    try { results.push(await analyzeTrend(pair)); }
-    catch (error) {
-      console.log(`❌ Trend Hunter ${pair}:`, error.message);
-      results.push({ pair, direction: 'WAIT', status: 'ERROR', score: 0 });
-    }
+function score(i,a,d,e){
+  const adx=Number(i?.adx), rsi=Number(i?.rsi), conf=clamp(a?.signal?.confidence);
+  let x=0;
+  if(e.emaAligned)x+=25;
+  if(e.macdAligned)x+=20;
+  if(Number.isFinite(adx)){
+    if(adx>=35)x+=25; else if(adx>=30)x+=22; else if(adx>=25)x+=18; else if(adx>=20)x+=10;
   }
-  const order = { ENTRY_READY: 5, WAIT_PULLBACK: 4, TREND_FOUND: 3, NO_TREND: 2, NO_DATA: 1, ERROR: 0 };
-  return results.sort((a,b) => ((order[b.status]||0)-(order[a.status]||0)) || (Number(b.score||0)-Number(a.score||0)));
+  if(Number.isFinite(rsi)){
+    if(e.rsiReady)x+=15;
+    else if(d==='BUY'&&rsi>50&&rsi<70)x+=10;
+    else if(d==='SELL'&&rsi>30&&rsi<50)x+=10;
+    else if(e.overheated)x+=3;
+  }
+  if(e.aiReady){
+    if(conf>=85)x+=15; else if(conf>=75)x+=12; else x+=8;
+  }
+  return Math.round(clamp(x));
 }
 
-module.exports = { PAIRS, analyzeTrend, scanTrends };
+function statusOf(d,s,e,adx){
+  if(d==='WAIT'||!Number.isFinite(adx)||adx<20)return 'NO_TREND';
+  if(e.overheated&&s>=65)return 'WAIT_PULLBACK';
+  if(s>=78&&e.adxReady&&e.rsiReady&&e.aiReady)return 'ENTRY_READY';
+  if(s>=65)return 'TREND_FOUND';
+  return 'NO_TREND';
+}
+
+function blockers(e){
+  const out=[];
+  if(!e.emaAligned)out.push('EMA');
+  if(!e.macdAligned)out.push('MACD');
+  if(!e.adxReady)out.push('ADX');
+  if(!e.rsiReady)out.push('RSI');
+  if(!e.aiReady)out.push('AI');
+  if(e.overheated)out.push('PULLBACK');
+  return out;
+}
+
+async function analyzeTrend(pair){
+  const a=await analyzePair(pair);
+  if(!a?.indicators)return {pair,direction:'WAIT',status:'NO_DATA',score:0,blockers:['DATA']};
+  const i=a.indicators,d=directionOf(i),e=evidence(i,a,d),s=score(i,a,d,e),adx=Number(i?.adx);
+  const status=statusOf(d,s,e,adx);
+  let levels=null;
+  if(status==='ENTRY_READY'){
+    try{levels=calculateTradeLevels(await getCandles(pair),d);}catch(err){console.log(`Trend levels ${pair}:`,err.message);}
+  }
+  return {
+    pair,direction:d,status,score:s,blockers:blockers(e),evidence:e,
+    aiConfidence:Number(a?.signal?.confidence)||0,
+    aiAction:String(a?.signal?.action||'WAIT').toUpperCase(),
+    adx, rsi:Number(i?.rsi), ema20:Number(i?.ema20), ema50:Number(i?.ema50),
+    macd:Number(i?.macd?.macd), macdSignal:Number(i?.macd?.signal), levels
+  };
+}
+
+async function scanTrends(){
+  const out=[];
+  for(const p of PAIRS){try{out.push(await analyzeTrend(p));}catch(e){out.push({pair:p,direction:'WAIT',status:'ERROR',score:0,blockers:['ERROR']});}}
+  const rank={ENTRY_READY:5,WAIT_PULLBACK:4,TREND_FOUND:3,NO_TREND:2,NO_DATA:1,ERROR:0};
+  return out.sort((a,b)=>(rank[b.status]-rank[a.status])||(b.score-a.score));
+}
+
+module.exports={PAIRS,analyzeTrend,scanTrends};
