@@ -1,10 +1,46 @@
-// Sprint 4 helper: one source of truth for trade quality + levels.
-// This module does NOT fetch market data itself.
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
-function clamp(value, min = 0, max = 100) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, n));
+function getProfile(pair = '') {
+  const symbol = String(pair).toUpperCase();
+
+  if (symbol === 'XAUUSD') {
+    return {
+      name: 'GOLD',
+      atrMultiplier: 1.40,
+      swingLookback: 20,
+      structureBufferATR: 0.25,
+      minRiskPct: 0.0018,
+      maxRiskPct: 0.0120,
+      rrTp1: 1.5,
+      rrTp2: 2.5
+    };
+  }
+
+  if (symbol === 'BTCUSD') {
+    return {
+      name: 'BTC',
+      atrMultiplier: 1.80,
+      swingLookback: 24,
+      structureBufferATR: 0.30,
+      minRiskPct: 0.0045,
+      maxRiskPct: 0.0350,
+      rrTp1: 1.5,
+      rrTp2: 2.5
+    };
+  }
+
+  return {
+    name: 'FOREX',
+    atrMultiplier: 1.35,
+    swingLookback: 20,
+    structureBufferATR: 0.20,
+    minRiskPct: 0.0008,
+    maxRiskPct: 0.0070,
+    rrTp1: 1.5,
+    rrTp2: 2.5
+  };
 }
 
 function trueRange(current, previousClose) {
@@ -12,13 +48,8 @@ function trueRange(current, previousClose) {
   const low = Number(current?.low);
   const prev = Number(previousClose);
 
-  if (!Number.isFinite(high) || !Number.isFinite(low)) {
-    return null;
-  }
-
-  if (!Number.isFinite(prev)) {
-    return high - low;
-  }
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return null;
+  if (!Number.isFinite(prev)) return high - low;
 
   return Math.max(
     high - low,
@@ -28,75 +59,41 @@ function trueRange(current, previousClose) {
 }
 
 function calculateATR(candles, period = 14) {
-  if (!Array.isArray(candles) || candles.length < period + 1) {
-    return null;
-  }
+  if (!Array.isArray(candles) || candles.length < period + 1) return null;
 
   const sample = candles.slice(-(period + 1));
-  const trs = [];
+  const ranges = [];
 
   for (let i = 1; i < sample.length; i++) {
     const tr = trueRange(sample[i], sample[i - 1]?.close);
-    if (Number.isFinite(tr) && tr > 0) trs.push(tr);
+    if (Number.isFinite(tr) && tr > 0) ranges.push(tr);
   }
 
-  if (trs.length < Math.max(5, Math.floor(period * 0.7))) {
-    return null;
-  }
+  if (ranges.length < Math.max(5, Math.floor(period * 0.7))) return null;
 
-  return trs.reduce((sum, v) => sum + v, 0) / trs.length;
+  return ranges.reduce((sum, x) => sum + x, 0) / ranges.length;
 }
 
-function calculateTradeLevels(candles, direction) {
-  if (!Array.isArray(candles) || candles.length < 15) {
-    return null;
+function recentSwing(candles, lookback) {
+  if (!Array.isArray(candles) || candles.length < 5) {
+    return { low: null, high: null };
   }
 
-  const entry = Number(candles.at(-1)?.close);
-  if (!Number.isFinite(entry) || entry <= 0) return null;
-
-  const atr = calculateATR(candles, 14);
-  if (!Number.isFinite(atr) || atr <= 0) return null;
-
-  // Fixed risk geometry:
-  // TP1 = 1R, TP2 = 2R, where 1R = 1.2 ATR.
-  // The same engine returns Entry/SL/TP to every UI consumer.
-  const riskDistance = atr * 1.2;
-  const tp1Distance = riskDistance;
-  const tp2Distance = riskDistance * 2;
-
-  let sl;
-  let tp1;
-  let tp2;
-
-  if (direction === 'BUY') {
-    sl = entry - riskDistance;
-    tp1 = entry + tp1Distance;
-    tp2 = entry + tp2Distance;
-  } else if (direction === 'SELL') {
-    sl = entry + riskDistance;
-    tp1 = entry - tp1Distance;
-    tp2 = entry - tp2Distance;
-  } else {
-    return null;
-  }
+  const sample = candles.slice(-lookback - 1, -1);
+  const lows = sample.map(c => Number(c?.low)).filter(Number.isFinite);
+  const highs = sample.map(c => Number(c?.high)).filter(Number.isFinite);
 
   return {
-    entry,
-    sl,
-    tp1,
-    tp2,
-    atr,
-    riskDistance,
-    rrTp1: 1,
-    rrTp2: 2
+    low: lows.length ? Math.min(...lows) : null,
+    high: highs.length ? Math.max(...highs) : null
   };
 }
 
 function technicalScoreFromAnalysis(analysis, direction) {
-  const buy = clamp((Number(analysis?.buyScore) || 0) * 25);
-  const sell = clamp((Number(analysis?.sellScore) || 0) * 25);
-  return direction === 'BUY' ? buy : sell;
+  const buyScore = Number(analysis?.buyScore) || 0;
+  const sellScore = Number(analysis?.sellScore) || 0;
+  const raw = direction === 'BUY' ? buyScore * 25 : sellScore * 25;
+  return clamp(Number.isFinite(raw) ? raw : 0, 0, 100);
 }
 
 function calculateFinalScore({
@@ -109,54 +106,132 @@ function calculateFinalScore({
   slRate,
   labApproved
 }) {
-  const smart = clamp(smartScore);
-  const ai = clamp(aiConfidence);
-  const technical = clamp(technicalScore);
-  const historical = clamp(historicalScore);
+  const smart = clamp(Number(smartScore) || 0, 0, 100);
+  const ai = clamp(Number(aiConfidence) || 0, 0, 100);
+  const technical = clamp(Number(technicalScore) || 0, 0, 100);
+  const historical = clamp(Number(historicalScore) || 0, 0, 100);
   const setups = Math.max(0, Number(similarSetups) || 0);
 
-  // Base: market scanner + technical confirmation.
   let weighted = smart * 0.55 + technical * 0.20;
   let weight = 0.75;
 
-  // AI only contributes when an actual AI confidence exists.
   if (ai > 0) {
     weighted += ai * 0.15;
     weight += 0.15;
   }
 
-  // Historical data only contributes when sample size is meaningful.
   if (setups >= 10) {
     weighted += historical * 0.10;
     weight += 0.10;
   }
 
-  // Re-normalize instead of pretending missing data is positive evidence.
-  let finalScore = weight > 0 ? weighted / weight : 0;
+  let score = weight > 0 ? weighted / weight : 0;
 
-  // Small evidence-based modifiers; capped to avoid dominating the score.
-  if (setups >= 10 && Number(tp1Rate) >= 60 && Number(slRate) <= 40) {
-    finalScore += 3;
-  }
-  if (setups >= 10 && labApproved) {
-    finalScore += 2;
-  }
-  if (setups >= 10 && Number(slRate) > 55) {
-    finalScore -= 6;
-  }
+  if (setups >= 10 && Number(tp1Rate) >= 60 && Number(slRate) <= 40) score += 3;
+  if (setups >= 10 && labApproved) score += 2;
+  if (setups >= 10 && Number(slRate) > 55) score -= 6;
 
-  return Math.round(clamp(finalScore));
+  return Math.round(clamp(score, 0, 100));
 }
 
 function getStrength(score) {
-  const s = clamp(score);
+  const s = clamp(Number(score) || 0, 0, 100);
   if (s >= 85) return 'VERY_STRONG';
   if (s >= 75) return 'STRONG';
   if (s >= 65) return 'MODERATE';
   return 'WEAK';
 }
 
+function calculateTradeLevels(candles, direction, pair = '') {
+  if (!Array.isArray(candles) || candles.length < 18) return null;
+
+  const profile = getProfile(pair);
+  const entry = Number(candles[candles.length - 1]?.close);
+  if (!Number.isFinite(entry) || entry <= 0) return null;
+
+  const atr = calculateATR(candles, 14);
+  if (!Number.isFinite(atr) || atr <= 0) return null;
+
+  const swing = recentSwing(candles, profile.swingLookback);
+  const minRisk = entry * profile.minRiskPct;
+  const maxRisk = entry * profile.maxRiskPct;
+  const atrRisk = atr * profile.atrMultiplier;
+  const buffer = atr * profile.structureBufferATR;
+
+  let atrStop;
+  let structureStop = null;
+  let stopSource = 'ATR';
+
+  if (direction === 'BUY') {
+    atrStop = entry - atrRisk;
+    if (Number.isFinite(swing.low) && swing.low < entry) {
+      structureStop = swing.low - buffer;
+    }
+  } else if (direction === 'SELL') {
+    atrStop = entry + atrRisk;
+    if (Number.isFinite(swing.high) && swing.high > entry) {
+      structureStop = swing.high + buffer;
+    }
+  } else {
+    return null;
+  }
+
+  let sl;
+  if (direction === 'BUY') {
+    sl = Number.isFinite(structureStop) ? Math.min(atrStop, structureStop) : atrStop;
+  } else {
+    sl = Number.isFinite(structureStop) ? Math.max(atrStop, structureStop) : atrStop;
+  }
+
+  if (Number.isFinite(structureStop)) {
+    const farther = direction === 'BUY'
+      ? structureStop < atrStop
+      : structureStop > atrStop;
+    if (farther) stopSource = 'SWING+ATR';
+  }
+
+  let riskDistance = Math.abs(entry - sl);
+
+  if (riskDistance < minRisk) {
+    riskDistance = minRisk;
+    sl = direction === 'BUY' ? entry - riskDistance : entry + riskDistance;
+    stopSource = 'MIN_DISTANCE';
+  }
+
+  if (riskDistance > maxRisk) {
+    return null;
+  }
+
+  const rrTp1 = profile.rrTp1;
+  const rrTp2 = profile.rrTp2;
+
+  const tp1 = direction === 'BUY'
+    ? entry + riskDistance * rrTp1
+    : entry - riskDistance * rrTp1;
+
+  const tp2 = direction === 'BUY'
+    ? entry + riskDistance * rrTp2
+    : entry - riskDistance * rrTp2;
+
+  return {
+    entry,
+    sl,
+    tp1,
+    tp2,
+    atr,
+    riskDistance,
+    riskPct: (riskDistance / entry) * 100,
+    rrTp1,
+    rrTp2,
+    stopSource,
+    swingLow: swing.low,
+    swingHigh: swing.high,
+    profile: profile.name
+  };
+}
+
 module.exports = {
+  getProfile,
   calculateATR,
   calculateTradeLevels,
   technicalScoreFromAnalysis,

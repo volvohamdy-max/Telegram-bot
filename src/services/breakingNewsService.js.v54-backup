@@ -1,0 +1,510 @@
+const axios = require('axios');
+const crypto = require('crypto');
+const { allUsers } = require('../database/users');
+const db = require('../database/db');
+const config = require('../config');
+
+const DEFAULT_CHANNELS = [
+  'https://t.me/s/ForexBreakingNews',
+  'https://t.me/s/fxstreetforex',
+  'https://t.me/s/fbsanalytics',
+  'https://t.me/s/brokerexness'
+];
+
+const HIGH_IMPACT_KEYWORDS = [
+  'adp','employment','nonfarm','nfp','cpi','inflation','ppi','pce','gdp',
+  'fomc','interest rate','rate decision','powell','jobless claims',
+  'unemployment','retail sales','durable goods','ism','pmi',
+  'consumer confidence','jolts','trade balance',
+  'معدل التوظيف','الوظائف','البطالة','التضخم','الفائدة',
+  'الناتج المحلي','مبيعات التجزئة','طلبات إعانة البطالة','مديري المشتريات'
+];
+
+function channels() {
+  const configured = String(process.env.BREAKING_NEWS_CHANNELS || '')
+    .split(',').map(x => x.trim()).filter(Boolean);
+  return configured.length ? configured : DEFAULT_CHANNELS;
+}
+
+function stripHtml(html) {
+  return String(html || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/<[^>]+>/g, '')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function extractMessages(html) {
+  const results = [];
+  const messageRegex = /<div class="tgme_widget_message_wrap[^"]*"[\s\S]*?<div class="tgme_widget_message[^"]*"[^>]*data-post="([^"]+)"[\s\S]*?<div class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>[\s\S]*?<\/div>\s*<\/div>/gi;
+  let match;
+
+  while ((match = messageRegex.exec(html))) {
+    results.push({ postId: match[1], text: stripHtml(match[2]) });
+  }
+
+  return results;
+}
+
+function isRelevant(text) {
+  const lower = String(text).toLowerCase();
+  const currencyRelevant =
+    /(?:USD|EUR|GBP|JPY|CHF|XAU|أمريكا|الولايات المتحدة|🇺🇸|الدولار|اليورو|الإسترليني|الين|الفرنك|الذهب)/i.test(text);
+  const impactRelevant = HIGH_IMPACT_KEYWORDS.some(keyword => lower.includes(keyword));
+  return currencyRelevant && impactRelevant;
+}
+
+function cleanMarketing(text) {
+  return String(text).split('\n').filter(line => {
+    const l = line.toLowerCase();
+    return !l.includes('telegram.me/') &&
+           !l.includes('t.me/') &&
+           !l.includes('انضم للقناة') &&
+           !l.includes('لمتابعة') &&
+           !l.includes('join');
+  }).join('\n').trim();
+}
+
+function valueAfter(text, labels) {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`${escaped}[ \\t]*[:：]?[ \\t]*([^\\n]*)`, 'i');
+    const m = text.match(re);
+    if (m) {
+      const value = m[1].replace(/[✅▪️⭕🟢🔴📈📉]/g, '').trim();
+      if (value) return value;
+    }
+  }
+  return null;
+}
+
+function detectCurrency(text) {
+  const t = String(text || '');
+
+  // Event/institution takes priority over incidental currency mentions.
+  if (/Bank of England|\bBoE\b|بنك إنجلترا/i.test(t)) return 'GBP';
+  if (/European Central Bank|\bECB\b|المركزي الأوروبي/i.test(t)) return 'EUR';
+  if (/Bank of Japan|\bBoJ\b|بنك اليابان/i.test(t)) return 'JPY';
+  if (/Swiss National Bank|\bSNB\b|البنك الوطني السويسري/i.test(t)) return 'CHF';
+
+  if (/\bADP\b|\bNFP\b|nonfarm|Federal Reserve|\bFed\b|FOMC|US CPI|U\.S\. CPI|US PPI|U\.S\. PPI|jobless claims|JOLTS|أمريكا|الولايات المتحدة|🇺🇸/i.test(t)) return 'USD';
+
+  if (/GBP|الإسترليني|بريطانيا|🇬🇧/i.test(t)) return 'GBP';
+  if (/EUR|اليورو|منطقة اليورو|🇪🇺/i.test(t)) return 'EUR';
+  if (/JPY|الين|اليابان|🇯🇵/i.test(t)) return 'JPY';
+  if (/CHF|الفرنك|سويسرا|🇨🇭/i.test(t)) return 'CHF';
+  if (/USD|الدولار الأمريكي|🇺🇸/i.test(t)) return 'USD';
+
+  return null;
+}
+function detectEvent(text) {
+  const lines = String(text).split('\n').map(x => x.trim()).filter(Boolean);
+  const known = [
+    /ADP/i,/Nonfarm|NFP/i,/Consumer Price|CPI|التضخم|أسعار المستهلك/i,
+    /Producer Price|PPI/i,/PCE/i,/GDP|الناتج المحلي/i,/FOMC|الفائدة|Interest Rate/i,
+    /Jobless Claims|إعانة البطالة/i,/Retail Sales|مبيعات التجزئة/i,
+    /Durable Goods|السلع المعمرة/i,/ISM|PMI|مديري المشتريات/i,
+    /JOLTS/i,/Unemployment|البطالة/i
+  ];
+
+  for (const line of lines) {
+    if (known.some(re => re.test(line))) {
+      return line.replace(/^[▪️⭕⬅️📰🟥✅🔴🟢\-\s]+/, '').trim();
+    }
+  }
+  return lines.find(line => line.length > 5 && line.length < 140) || 'Economic Release';
+}
+
+function parseNumeric(value) {
+  if (value == null) return null;
+  const m = String(value).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  let n = Number(m[0]);
+  if (!Number.isFinite(n)) return null;
+  const text = String(value).toUpperCase();
+  if (text.includes('K')) n *= 1000;
+  if (text.includes('M')) n *= 1000000;
+  return n;
+}
+
+function inferImpact(text, currency, actual, forecast) {
+  if (/إيجابي للذهب|positive for gold/i.test(text)) return 'GOLD_POSITIVE';
+  if (/سلبي للذهب|negative for gold/i.test(text)) return 'GOLD_NEGATIVE';
+  if (/سلبي للدولار|negative for (the )?u\.?s\.? dollar/i.test(text)) return 'USD_NEGATIVE';
+  if (/إيجابي للدولار|positive for (the )?u\.?s\.? dollar/i.test(text)) return 'USD_POSITIVE';
+
+  if (currency === 'USD') {
+    const a = parseNumeric(actual);
+    const f = parseNumeric(forecast);
+    if (Number.isFinite(a) && Number.isFinite(f)) {
+      const inverse = /unemployment|jobless|بطالة|إعانة/i.test(text);
+      if (inverse) return a < f ? 'USD_POSITIVE' : a > f ? 'USD_NEGATIVE' : null;
+      return a > f ? 'USD_POSITIVE' : a < f ? 'USD_NEGATIVE' : null;
+    }
+  }
+  return null;
+}
+
+function affectedPairs(currency) {
+  const map = {
+    USD: ['XAUUSD','EURUSD','GBPUSD','USDJPY','BTCUSD'],
+    EUR: ['EURUSD','EURJPY'],
+    GBP: ['GBPUSD','GBPJPY'],
+    JPY: ['USDJPY','EURJPY','GBPJPY','CHFJPY'],
+    CHF: ['CHFJPY']
+  };
+  return map[currency] || [];
+}
+
+function extractNarrativeValues(text) {
+  const out = {
+    actual: null,
+    forecast: null,
+    previous: null
+  };
+
+  // Example: "NFP came in at -23K vs. 80K expected"
+  let m = String(text).match(
+    /came\s+in\s+at\s+([+-]?\d[\d,.]*(?:K|M|%|B)?)\s+vs\.?\s+([+-]?\d[\d,.]*(?:K|M|%|B)?)\s+(?:expected|forecast|consensus)/i
+  );
+
+  if (m) {
+    out.actual = m[1];
+    out.forecast = m[2];
+  }
+
+  // Example: "rose to 3.2% vs 3.0% expected"
+  if (!out.actual) {
+    m = String(text).match(
+      /(?:at|to|was|printed|reported)\s+([+-]?\d[\d,.]*(?:K|M|%|B)?)\s+vs\.?\s+([+-]?\d[\d,.]*(?:K|M|%|B)?)\s+(?:expected|forecast|consensus)/i
+    );
+
+    if (m) {
+      out.actual = m[1];
+      out.forecast = m[2];
+    }
+  }
+
+  // Example: "kept its cash rate at 4.35%"
+  if (!out.actual) {
+    m = String(text).match(
+      /(?:rate|cash rate|policy rate|interest rate)[^\n.]{0,40}?\bat\s+([+-]?\d[\d,.]*%)/i
+    );
+
+    if (m) {
+      out.actual = m[1];
+    }
+  }
+
+  // Previous value when written inline.
+  m = String(text).match(
+    /previous(?:ly)?\s*(?:at|was|:)?\s*([+-]?\d[\d,.]*(?:K|M|%|B)?)/i
+  );
+
+  if (m) {
+    out.previous = m[1];
+  }
+
+  return out;
+}
+
+function hasKnownMacroEvent(text) {
+  return /\bADP\b|\bNFP\b|nonfarm|consumer price|\bCPI\b|producer price|\bPPI\b|\bPCE\b|\bGDP\b|FOMC|interest rate|rate decision|jobless claims|unemployment|retail sales|durable goods|\bISM\b|\bPMI\b|JOLTS|employment|التوظيف|الوظائف|البطالة|التضخم|الفائدة|الناتج المحلي|مبيعات التجزئة|إعانة البطالة|مديري المشتريات/i.test(text);
+}
+
+function isReleasedDataPost(text, actual) {
+  if (actual != null && String(actual).trim() !== '') return true;
+
+  return /صدر الآن|released now|came in at|reported at|printed at|actual\s*:|current\s*:|الحالي\s*:|rate decision|kept .*rate at|cut .*rate to|raised .*rate to/i.test(text);
+}
+
+function extractTripleAfterLabel(text, labelRegex) {
+  const re = new RegExp(
+    labelRegex.source +
+    '[\\s\\S]{0,140}?Actual\\s*[—:-]?\\s*([+-]?\\d[\\d,.]*(?:K|M|B|%)?)' +
+    '[\\s\\S]{0,80}?Expected\\s*[—:-]?\\s*([+-]?\\d[\\d,.]*(?:K|M|B|%)?)' +
+    '[\\s\\S]{0,80}?Previous\\s*[—:-]?\\s*([+-]?\\d[\\d,.]*(?:K|M|B|%)?)',
+    'i'
+  );
+
+  const m = String(text).match(re);
+
+  return m
+    ? { actual: m[1], forecast: m[2], previous: m[3] }
+    : null;
+}
+
+function extractEventSpecificValues(text, eventName) {
+  const t = String(text || '');
+  const e = String(eventName || '');
+
+  if (/\bNFP\b|nonfarm/i.test(e + ' ' + t)) {
+    const triple = extractTripleAfterLabel(t, /(?:\bNFP\b|Nonfarm[^:\n]*)/i);
+    if (triple) return triple;
+
+    const m = t.match(
+      /(?:\bNFP\b|nonfarm)[^\n.]{0,100}?came\s+in\s+at\s+([+-]?\d[\d,.]*(?:K|M|B|%)?)\s+vs\.?\s+([+-]?\d[\d,.]*(?:K|M|B|%)?)\s+expected/i
+    );
+    if (m) return { actual: m[1], forecast: m[2], previous: null };
+  }
+
+  if (/\bADP\b/i.test(e + ' ' + t)) {
+    const triple = extractTripleAfterLabel(t, /(?:\bADP\b[^:\n]*)/i);
+    if (triple) return triple;
+  }
+
+  if (/\bCPI\b|consumer price|أسعار المستهلك|التضخم/i.test(e + ' ' + t)) {
+    const triple = extractTripleAfterLabel(t, /(?:\bCPI\b|Consumer Price[^:\n]*)/i);
+    if (triple) return triple;
+  }
+
+  if (/unemployment|البطالة/i.test(e)) {
+    const triple = extractTripleAfterLabel(t, /(?:Unemployment Rate|معدل البطالة)/i);
+    if (triple) return triple;
+  }
+
+  return null;
+}
+
+function isCommentaryOnly(text) {
+  const t = String(text || '').trim();
+
+  if (/^(?:Aftermath|Preview|Outlook|Analysis|Technical Analysis)\b/i.test(t)) {
+    return true;
+  }
+
+  // A "Reaction" post is only retained when it contains an explicit fresh release comparison.
+  if (/^Reaction\b/i.test(t)) {
+    return !/came\s+in\s+at\s+[+-]?\d[\d,.]*(?:K|M|B|%)?\s+vs\.?\s+[+-]?\d[\d,.]*(?:K|M|B|%)?\s+expected/i.test(t);
+  }
+
+  return false;
+}
+
+function parseBreakingPost(post, sourceUrl = '') {
+  const text = cleanMarketing(post.text);
+
+  if (!isRelevant(text)) return null;
+  if (!hasKnownMacroEvent(text)) return null;
+  if (isCommentaryOnly(text)) return null;
+
+  const currency = detectCurrency(text);
+  if (!currency) return null;
+
+  const event = detectEvent(text);
+
+  let previous = valueAfter(text, [
+    'السابق',
+    'Previous'
+  ]);
+
+  let forecast = valueAfter(text, [
+    'التقدير',
+    'المتوقع',
+    'Forecast',
+    'Consensus'
+  ]);
+
+  let actual = valueAfter(text, [
+    'الحالي',
+    'Actual',
+    'Current'
+  ]);
+
+  const specific = extractEventSpecificValues(text, event);
+
+  if (specific) {
+    actual = specific.actual ?? actual;
+    forecast = specific.forecast ?? forecast;
+    previous = specific.previous ?? previous;
+  } else {
+    const narrative = extractNarrativeValues(text);
+
+    if (!actual) actual = narrative.actual;
+    if (!forecast) forecast = narrative.forecast;
+    if (!previous) previous = narrative.previous;
+  }
+
+  if (!isReleasedDataPost(text, actual)) return null;
+
+  const noisyFeed =
+    /fxstreetforex|fbsanalytics/i.test(String(sourceUrl));
+
+  if (noisyFeed && !actual) return null;
+
+  const impact = inferImpact(
+    event,
+    currency,
+    actual,
+    forecast
+  );
+
+  return {
+    postId: post.postId,
+    sourceUrl,
+    currency,
+    event,
+    previous,
+    forecast,
+    actual,
+    impact,
+    pairs: affectedPairs(currency)
+  };
+}
+function dedupeKey(item) {
+  return `breaking_${crypto.createHash('sha1')
+    .update(String(item.postId)).digest('hex').slice(0, 20)}`;
+}
+
+function alreadySent(key) {
+  return Boolean(db.prepare('SELECT 1 FROM news_alerts WHERE news_id=?').get(key));
+}
+
+function markSent(key) {
+  db.prepare('INSERT OR IGNORE INTO news_alerts(news_id,alert_sent) VALUES(?,1)').run(key);
+}
+
+function recipients() {
+  const ids = new Set();
+  for (const user of allUsers()) ids.add(String(user.telegram_id));
+  for (const adminId of config.adminIds || []) ids.add(String(adminId));
+  if (config.mainGroupId) ids.add(String(config.mainGroupId));
+  return [...ids];
+}
+
+function impactText(item) {
+  switch (item.impact) {
+    case 'USD_NEGATIVE':
+      return '📉 القراءة الأولية: سلبي للدولار الأمريكي\n📈 وقد يكون داعمًا للذهب';
+    case 'USD_POSITIVE':
+      return '📈 القراءة الأولية: إيجابي للدولار الأمريكي\n📉 وقد يضغط على الذهب';
+    case 'GOLD_POSITIVE':
+      return '📈 القراءة المعلنة: إيجابي للذهب';
+    case 'GOLD_NEGATIVE':
+      return '📉 القراءة المعلنة: سلبي للذهب';
+    default:
+      return '⚠️ يحتاج السوق إلى تقييم رد الفعل الفعلي بعد الإصدار';
+  }
+}
+
+function message(item) {
+  return `🟥 <b>صدر الآن — خبر اقتصادي</b>
+
+💱 العملة: <b>${item.currency || '-'}</b>
+📰 الخبر: <b>${item.event}</b>
+
+▪️ السابق: ${item.previous || '-'}
+▪️ التقدير: ${item.forecast || '-'}
+✅ الحالي: ${item.actual || '-'}
+
+${impactText(item)}
+
+🎯 الأصول المرتبطة:
+${item.pairs.length ? item.pairs.join(', ') : '-'}
+
+⚠️ قراءة الخبر لا تضمن اتجاه السعر؛ قد تختلف استجابة السوق بسبب التسعير المسبق أو تفاصيل الإصدار.
+
+🤖 Forex AI Bot`;
+}
+
+async function broadcast(bot, text) {
+  for (const chatId of recipients()) {
+    try {
+      await bot.telegram.sendMessage(chatId, text, { parse_mode: 'HTML' });
+    } catch (error) {
+      console.log(`Breaking news send failed ${chatId}:`, error.message);
+    }
+  }
+}
+
+async function fetchChannel(url) {
+  const { data } = await axios.get(url, {
+    timeout: 15000,
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ForexAIBot/1.0)' }
+  });
+  return extractMessages(data);
+}
+
+async function checkBreakingNews(bot) {
+  for (const url of channels()) {
+    try {
+      const posts = await fetchChannel(url);
+
+      for (const post of posts.slice(-12)) {
+        const item = parseBreakingPost(post, url);
+        if (!item) continue;
+
+        const key = dedupeKey(item);
+        const eventKey = eventDedupeKey(item);
+
+        if (alreadySent(key) || alreadySent(eventKey)) continue;
+
+        markSent(key);
+        markSent(eventKey);
+
+        await broadcast(bot, message(item));
+
+        console.log(`🟥 Breaking economic news sent: ${item.event}`);
+      }
+    } catch (error) {
+      console.log(
+        `⚠️ Breaking news source failed ${url}:`,
+        error.response?.status || '',
+        error.message
+      );
+    }
+  }
+}
+
+async function seedBaseline() {
+  for (const url of channels()) {
+    const posts = await fetchChannel(url);
+
+    for (const post of posts.slice(-12)) {
+      const item = parseBreakingPost(post, url);
+      if (!item) continue;
+
+      const key = dedupeKey(item);
+      const eventKey = eventDedupeKey(item);
+
+      if (!alreadySent(key)) markSent(key);
+      if (!alreadySent(eventKey)) markSent(eventKey);
+    }
+  }
+}
+
+function startBreakingNews(bot) {
+  const intervalMs =
+    Number(process.env.BREAKING_NEWS_INTERVAL_MS) || 60 * 1000;
+
+  setTimeout(async () => {
+    try {
+      await seedBaseline();
+      console.log('📰 Breaking news baseline initialized');
+    } catch (error) {
+      console.log('Breaking news baseline error:', error.message);
+    }
+
+    setInterval(() => {
+      checkBreakingNews(bot).catch(error =>
+        console.log('Breaking news loop error:', error.message)
+      );
+    }, intervalMs);
+
+    console.log(
+      `🟥 Breaking News Watch every ${Math.round(intervalMs / 1000)} seconds`
+    );
+  }, 5000);
+}
+
+module.exports = {
+  checkBreakingNews,
+  startBreakingNews,
+  parseBreakingPost
+};

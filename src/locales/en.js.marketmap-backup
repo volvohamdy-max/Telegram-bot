@@ -25,7 +25,6 @@ module.exports = {
   vipChoose: 'Choose a VIP plan:',
   helpText: 'ℹ️ Help\n\n/menu Main menu\n/vip VIP subscription\n/ref Referral link\n/status Account status',
   buttons: {
-    marketMap: '🧭 Market Map',
     trendHunter: '📡 Trend Hunter',
     tradeNow: '⚡ Trade Now',
     scanner: '🔎 Smart Scanner',

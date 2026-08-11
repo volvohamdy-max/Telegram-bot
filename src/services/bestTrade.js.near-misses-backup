@@ -17,34 +17,7 @@ const MIN_AI_CONFIDENCE = 60;
 // أفضل صفقة
 // =====================================================
 
-let lastRejectedCandidates = [];
-
-function rememberRejected(candidate, direction, aiConfidence, reason) {
-    if (!candidate || !candidate.pair) return;
-
-    lastRejectedCandidates.push({
-        pair: candidate.pair,
-        action: direction || candidate.action || 'WAIT',
-        smartScore: Number(candidate.score ?? candidate.smartScore ?? 0) || 0,
-        aiConfidence: Number(aiConfidence) || 0,
-        reason
-    });
-}
-
-function getLastRejectedCandidates(limit = 2) {
-    return [...lastRejectedCandidates]
-        .sort((a, b) => {
-            if (b.aiConfidence !== a.aiConfidence) {
-                return b.aiConfidence - a.aiConfidence;
-            }
-
-            return b.smartScore - a.smartScore;
-        })
-        .slice(0, Math.max(1, Number(limit) || 2));
-}
-
 async function getBestTrade() {
-    lastRejectedCandidates = [];
 
     console.log('🎯 BEST TRADE SCAN STARTED');
 
@@ -232,13 +205,6 @@ async function getBestTrade() {
                     `❌ AI confirmation missing: ${candidate.pair}`
                 );
 
-                rememberRejected(
-                    candidate,
-                    scannerDirection,
-                    aiConfidence,
-                    'AI_MISSING'
-                );
-
                 continue;
             }
 
@@ -254,13 +220,6 @@ async function getBestTrade() {
                     `❌ AI direction mismatch: ${candidate.pair}`
                 );
 
-                rememberRejected(
-                    candidate,
-                    scannerDirection,
-                    aiConfidence,
-                    'AI_MISMATCH'
-                );
-
                 continue;
             }
 
@@ -274,13 +233,6 @@ async function getBestTrade() {
             ) {
                 console.log(
                     `⚠️ Low AI confidence: ${candidate.pair} ${aiConfidence}%`
-                );
-
-                rememberRejected(
-                    candidate,
-                    scannerDirection,
-                    aiConfidence,
-                    'AI_LOW_CONFIDENCE'
                 );
 
                 continue;
@@ -508,6 +460,5 @@ async function getBestTrade() {
 
 
 module.exports = {
-    getBestTrade,
-    getLastRejectedCandidates
+    getBestTrade
 };

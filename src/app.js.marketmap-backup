@@ -4,14 +4,11 @@ const initDatabase = require('./database/init');
 const db = require('./database/db');
 const registerStart = require('./commands/start');
 const registerUserCommands = require('./commands/user');
-const registerSlashCommands = require('./commands/slashCommands');
-const registerMarketMap = require('./commands/marketMap');
 const registerTrendHunter = require('./commands/trendHunter');
 const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
 const startScheduler = require('./services/scheduler');
-const { startBreakingNews } = require('./services/breakingNewsService');
 const { startAutoTrendHunter } = require('./services/trendHunterAuto');
 const languageRouter = require('./utils/languageRouter');
 
@@ -32,17 +29,10 @@ async function main() {
   await bot.telegram.setMyCommands([
     { command: 'start', description: '🚀 Start / بدء' },
     { command: 'menu', description: '📋 Main menu / القائمة الرئيسية' },
-    { command: 'trade', description: '⚡ Best trade / أفضل صفقة' },
-    { command: 'scanner', description: '🔎 Smart Scanner / الماسح الذكي' },
-    { command: 'trend', description: '📡 Trend Hunter / صياد الترند' },
-    { command: 'map', description: '🧭 Market Map / خريطة السوق' },
-    { command: 'analysis', description: '📈 Analyze asset / تحليل أصل' },
     { command: 'gold', description: '🥇 XAUUSD analysis / تحليل الذهب' },
-    { command: 'news', description: '📰 Economic news / الأخبار' },
-    { command: 'alerts', description: '🔔 Alerts / التنبيهات' },
-    { command: 'status', description: '👤 Account / الحساب' },
-    { command: 'ref', description: '🔗 Referral / الإحالة' },
     { command: 'vip', description: '💎 VIP' },
+    { command: 'ref', description: '🔗 Referral / الإحالة' },
+    { command: 'status', description: '👤 Account / الحساب' },
     { command: 'help', description: 'ℹ️ Help / المساعدة' }
   ]);
 
@@ -55,8 +45,6 @@ async function main() {
   registerSettings(bot);
   registerAlerts(bot);
   registerTrendHunter(bot);
-  registerMarketMap(bot);
-  registerSlashCommands(bot);
   registerUserCommands(bot);
   registerAdminCommands(bot);
 
@@ -68,7 +56,6 @@ async function main() {
   });
 
   startScheduler(bot);
-  startBreakingNews(bot);
   startAutoTrendHunter(bot);
   console.log('Scheduler started.');
 

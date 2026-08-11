@@ -1,4 +1,4 @@
-const { analyzePair } = require('./analysisGate');
+const { analyzePair } = require('./analysisService');
 
 const SCANNER_PAIRS = [
     'XAUUSD',

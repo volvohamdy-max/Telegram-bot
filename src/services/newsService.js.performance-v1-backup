@@ -8,7 +8,7 @@ const {
   isHighImpact,
   eventHash,
   affectedPairs
-} = require('./newsCalendarGate');
+} = require('./newsProviders');
 
 function recipients() {
   const out = new Set();

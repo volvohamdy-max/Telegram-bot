@@ -17,34 +17,7 @@ const MIN_AI_CONFIDENCE = 60;
 // أفضل صفقة
 // =====================================================
 
-let lastRejectedCandidates = [];
-
-function rememberRejected(candidate, direction, aiConfidence, reason) {
-    if (!candidate || !candidate.pair) return;
-
-    lastRejectedCandidates.push({
-        pair: candidate.pair,
-        action: direction || candidate.action || 'WAIT',
-        smartScore: Number(candidate.score ?? candidate.smartScore ?? 0) || 0,
-        aiConfidence: Number(aiConfidence) || 0,
-        reason
-    });
-}
-
-function getLastRejectedCandidates(limit = 2) {
-    return [...lastRejectedCandidates]
-        .sort((a, b) => {
-            if (b.aiConfidence !== a.aiConfidence) {
-                return b.aiConfidence - a.aiConfidence;
-            }
-
-            return b.smartScore - a.smartScore;
-        })
-        .slice(0, Math.max(1, Number(limit) || 2));
-}
-
 async function getBestTrade() {
-    lastRejectedCandidates = [];
 
     console.log('🎯 BEST TRADE SCAN STARTED');
 
@@ -224,41 +197,34 @@ async function getBestTrade() {
 
 
             // =============================================
-            // AI confirmation is mandatory
-            // =============================================
-
-            if (!aiDirection) {
-                console.log(
-                    `❌ AI confirmation missing: ${candidate.pair}`
-                );
-
-                rememberRejected(
-                    candidate,
-                    scannerDirection,
-                    aiConfidence,
-                    'AI_MISSING'
-                );
-
-                continue;
-            }
-
-
-            // =============================================
-            // AI direction must match scanner direction
+            // لو AI موجود لكنه خالف الاتجاه
             // =============================================
 
             if (
+                aiDirection &&
                 aiDirection !== scannerDirection
             ) {
+
                 console.log(
                     `❌ AI direction mismatch: ${candidate.pair}`
                 );
 
-                rememberRejected(
-                    candidate,
-                    scannerDirection,
-                    aiConfidence,
-                    'AI_MISMATCH'
+                continue;
+            }
+
+
+            // =============================================
+            // لو AI موجود وثقته ضعيفة
+            // =============================================
+
+            if (
+                aiDirection &&
+                aiConfidence > 0 &&
+                aiConfidence < MIN_AI_CONFIDENCE
+            ) {
+
+                console.log(
+                    `⚠️ Low AI confidence: ${candidate.pair} ${aiConfidence}%`
                 );
 
                 continue;
@@ -266,21 +232,174 @@ async function getBestTrade() {
 
 
             // =============================================
-            // Minimum AI confidence
+            // الاتجاه النهائي
             // =============================================
 
+            const direction =
+                aiDirection ||
+                scannerDirection;
+
+
             if (
-                aiConfidence < 60
+                direction !== 'BUY' &&
+                direction !== 'SELL'
             ) {
+
+                continue;
+            }
+
+
+            // =============================================
+            // Signal Lab
+            // =============================================
+
+            let lab = null;
+
+
+            try {
+
+                lab =
+                    await runSignalLab(
+                        candidate.pair,
+                        indicators,
+                        direction
+                    );
+
+            } catch (error) {
+
                 console.log(
-                    `⚠️ Low AI confidence: ${candidate.pair} ${aiConfidence}%`
+                    `⚠️ Signal Lab skipped ${candidate.pair}:`,
+                    error.message
                 );
 
-                rememberRejected(
-                    candidate,
-                    scannerDirection,
+                lab = null;
+            }
+
+
+            // =============================================
+            // بيانات التاريخ
+            // =============================================
+
+            const historicalScore =
+                Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        Number(
+                            lab?.historicalScore
+                        ) || 0
+                    )
+                );
+
+
+            const similarSetups =
+                Math.max(
+                    0,
+                    Number(
+                        lab?.similarSetups
+                    ) || 0
+                );
+
+
+            const tp1Rate =
+                Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        Number(
+                            lab?.tp1Rate
+                        ) || 0
+                    )
+                );
+
+
+            const tp2Rate =
+                Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        Number(
+                            lab?.tp2Rate
+                        ) || 0
+                    )
+                );
+
+
+            const slRate =
+                Math.max(
+                    0,
+                    Math.min(
+                        100,
+                        Number(
+                            lab?.slRate
+                        ) || 0
+                    )
+                );
+
+
+            const labApproved =
+                Boolean(
+                    lab?.approved
+                );
+
+
+            // =============================================
+            // Sprint 4 unified quality score
+            // =============================================
+            const technicalScore =
+                technicalScoreFromAnalysis(
+                    analysis,
+                    direction
+                );
+
+            let finalScore =
+                calculateFinalScore({
+                    smartScore,
+                    technicalScore,
                     aiConfidence,
-                    'AI_LOW_CONFIDENCE'
+                    technicalScore,
+                    historicalScore,
+                    similarSetups,
+                    tp1Rate,
+                    slRate,
+                    labApproved
+                });
+
+            // =============================================
+            // Entry / TP / SL
+            // =============================================
+
+            let candles;
+
+            try {
+
+                candles =
+                    await getCandles(
+                        candidate.pair
+                    );
+
+            } catch (error) {
+
+                console.log(
+                    `⚠️ Candle error ${candidate.pair}:`,
+                    error.message
+                );
+
+                continue;
+            }
+
+
+            const levels =
+                calculateTradeLevels(
+                    candles,
+                    direction
+                );
+
+
+            if (!levels) {
+
+                console.log(
+                    `⚠️ Cannot calculate trade levels: ${candidate.pair}`
                 );
 
                 continue;
@@ -508,6 +627,5 @@ async function getBestTrade() {
 
 
 module.exports = {
-    getBestTrade,
-    getLastRejectedCandidates
+    getBestTrade
 };

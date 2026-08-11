@@ -6,10 +6,7 @@ const { analyzePair } = require('../services/analysisService');
 const { scanMarkets } = require('../services/smartScanner');
 const { Markup } = require('telegraf');
 const { runSignalLab } = require('../services/signalLab');
-const {
-  getBestTrade,
-  getLastRejectedCandidates
-} = require('../services/bestTrade');
+const { getBestTrade } = require('../services/bestTrade');
 
 const PAIRS = [
   'XAUUSD',
@@ -615,47 +612,17 @@ function registerUserCommands(bot) {
       const trade = await getBestTrade();
 
       if (!trade) {
-        const rejected = getLastRejectedCandidates(2);
-
-        const reasonText = (item, en) => {
-          if (item.reason === 'AI_MISSING') {
-            return en
-              ? '❌ AI confirmation unavailable'
-              : '❌ تأكيد AI غير متاح';
-          }
-
-          if (item.reason === 'AI_MISMATCH') {
-            return en
-              ? '❌ AI direction disagrees with scanner'
-              : '❌ اتجاه AI مختلف عن اتجاه الماسح';
-          }
-
-          return en
-            ? `❌ AI confidence ${item.aiConfidence}% — minimum 60%`
-            : `❌ ثقة AI ${item.aiConfidence}% — الحد الأدنى 60%`;
-        };
-
-        const nearText = rejected.length
-          ? rejected.map((item, index) =>
-              `${index === 0 ? '🥇' : '🥈'} ${item.pair} — ${item.action}
-⭐ Smart Score: ${item.smartScore}/100
-${reasonText(item, isEnglish(ctx))}`
-            ).join('\n\n')
-          : '';
-
         return ctx.reply(
           isEnglish(ctx)
             ? `🔍 No high-quality trade is available right now.
 
-The bot rejected the current opportunities because the safety conditions are incomplete.
-${nearText ? `\nClosest opportunities:\n\n${nearText}\n` : ''}
-🛡️ The bot prefers no trade over an unconfirmed setup.
+The current opportunities did not pass the bot's entry filters.
+
 🟢 Market monitoring continues.`
             : `🔍 لا توجد صفقة قوية مناسبة حاليًا.
 
-البوت رفض الفرص الحالية لأن شروط الأمان لم تكتمل.
-${nearText ? `\nأقرب الفرص:\n\n${nearText}\n` : ''}
-🛡️ البوت يفضّل عدم الدخول بدل إرسال صفقة غير مؤكدة.
+الفرص الحالية لم تتجاوز شروط الدخول الخاصة بالبوت.
+
 🟢 السوق تحت المراقبة.`,
           keyboard(ctx)
         );

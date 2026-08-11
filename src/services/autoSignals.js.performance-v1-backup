@@ -1,4 +1,4 @@
-const { analyzePair } = require('./analysisGate');
+const { analyzePair } = require('./analysisService');
 const { allUsers } = require('../database/users');
 const { addTrade } = require('../database/trades');
 const { getLivePrice } = require('./priceService');

@@ -11,7 +11,6 @@ const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
 const startScheduler = require('./services/scheduler');
-const { startBreakingNews } = require('./services/breakingNewsService');
 const { startAutoTrendHunter } = require('./services/trendHunterAuto');
 const languageRouter = require('./utils/languageRouter');
 
@@ -68,7 +67,6 @@ async function main() {
   });
 
   startScheduler(bot);
-  startBreakingNews(bot);
   startAutoTrendHunter(bot);
   console.log('Scheduler started.');
 
