@@ -6,7 +6,6 @@ const mainKeyboard = (language = 'ar') => {
 
   return Markup.keyboard([
     [buttons.tradeNow, buttons.scanner],
-    [buttons.trendHunter],
     [buttons.analysis, buttons.signalLab],
     [buttons.vip, buttons.account],
     [buttons.referral, buttons.alerts],

@@ -4,12 +4,10 @@ const initDatabase = require('./database/init');
 const db = require('./database/db');
 const registerStart = require('./commands/start');
 const registerUserCommands = require('./commands/user');
-const registerTrendHunter = require('./commands/trendHunter');
 const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
 const startScheduler = require('./services/scheduler');
-const { startAutoTrendHunter } = require('./services/trendHunterAuto');
 const languageRouter = require('./utils/languageRouter');
 
 async function main() {
@@ -44,7 +42,6 @@ async function main() {
   registerStart(bot);
   registerSettings(bot);
   registerAlerts(bot);
-  registerTrendHunter(bot);
   registerUserCommands(bot);
   registerAdminCommands(bot);
 
@@ -56,7 +53,6 @@ async function main() {
   });
 
   startScheduler(bot);
-  startAutoTrendHunter(bot);
   console.log('Scheduler started.');
 
   try {

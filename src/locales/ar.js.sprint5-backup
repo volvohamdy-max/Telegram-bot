@@ -25,7 +25,6 @@ module.exports = {
   vipChoose: 'اختر خطة VIP:',
   helpText: 'ℹ️ المساعدة\n\n/menu القائمة الرئيسية\n/vip اشتراك VIP\n/ref رابط الإحالة\n/status حالة الحساب',
   buttons: {
-    trendHunter: '📡 صياد الترند',
     tradeNow: '⚡ صفقة الآن',
     scanner: '🔎 Smart Scanner',
     analysis: '📈 تحليل',
