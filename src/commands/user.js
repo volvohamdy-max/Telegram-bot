@@ -352,6 +352,89 @@ const strength =
 ⚠️ التقييمات مؤشرات تحليلية وليست ضمانًا للربح.`;
 }
 
+
+function scalpStatusTextV2(status, en) {
+  const map = {
+    ENTRY_READY: en ? '✅ Entry ready now' : '✅ دخول مناسب الآن',
+    WAIT_PULLBACK: en ? '🟡 Wait for pullback' : '🟡 انتظار Pullback',
+    WAIT: en ? '🟡 Waiting for 5M confirmation' : '🟡 انتظار تأكيد 5M',
+    REJECT: en ? '❌ Entry rejected' : '❌ نقطة الدخول مرفوضة',
+    NOT_CHECKED: en ? '⚪ 5M not checked' : '⚪ لم يتم فحص 5M',
+    ERROR: en ? '⚠️ 5M unavailable' : '⚠️ تعذر فحص 5M'
+  };
+  return map[String(status || 'NOT_CHECKED')] || String(status || 'NOT_CHECKED');
+}
+
+function bestOpportunityTextV2(ctx, item) {
+  const en = isEnglish(ctx);
+  const scalp = item.scalpEntry || {};
+  const action = item.action === 'BUY' ? '🟢 BUY' : item.action === 'SELL' ? '🔴 SELL' : '⚪ WAIT';
+  const confidence = Number.isFinite(Number(item.confidence)) ? `${Number(item.confidence)}%` : (en ? 'Unavailable' : 'غير متاح');
+  const status = scalpStatusTextV2(scalp.status, en);
+
+  return en
+    ? `🏆 BEST OPPORTUNITY NOW
+
+🎯 ${item.pair}  ${action}
+
+━━━━━━━━━━━━━━━━━━
+⭐ Smart Score: ${item.score}/100
+🤖 AI Confidence: ${confidence}
+📊 15M Direction: ${item.action}
+⏱️ 5M Entry: ${status}
+
+📌 ${scalp.status === 'ENTRY_READY'
+      ? 'Technically ready. Use “⚡ Trade Now” for strict execution approval and exact levels.'
+      : 'Strongest current opportunity, but NOT an immediate-entry signal.'}`
+    : `🏆 أفضل فرصة حاليًا
+
+🎯 ${item.pair}  ${action}
+
+━━━━━━━━━━━━━━━━━━
+⭐ Smart Score: ${item.score}/100
+🤖 ثقة AI: ${confidence}
+📊 اتجاه 15M: ${item.action}
+⏱️ دخول 5M: ${status}
+
+📌 ${scalp.status === 'ENTRY_READY'
+      ? 'الفرصة جاهزة فنيًا. استخدم «⚡ صفقة الآن» لاعتماد التنفيذ وإظهار المستويات.'
+      : 'دي أقوى فرصة موجودة حاليًا، لكنها ليست إشارة دخول فوري.'}`;
+}
+
+function noTradeTextV2(ctx, rejected) {
+  const en = isEnglish(ctx);
+  const reason = (item) => {
+    if (item.reason === 'AI_MISSING') return en ? '❌ AI confirmation unavailable' : '❌ تأكيد AI غير متاح';
+    if (item.reason === 'AI_MISMATCH') return en ? '❌ AI direction mismatch' : '❌ اتجاه AI مختلف عن الماسح';
+    if (item.reason === 'SCALP_NOT_READY') return en
+      ? `🟡 5M not ready — ${item.scalpStatus || 'NOT_READY'}`
+      : `🟡 دخول 5M غير جاهز — ${item.scalpStatus || 'NOT_READY'}`;
+    return en
+      ? `❌ AI confidence ${item.aiConfidence}% — minimum 60%`
+      : `❌ ثقة AI ${item.aiConfidence}% — الحد الأدنى 60%`;
+  };
+
+  const near = Array.isArray(rejected) && rejected.length
+    ? rejected.slice(0, 3).map((item, index) =>
+        `${['🥇','🥈','🥉'][index] || '•'} ${item.pair} — ${item.action}
+⭐ Smart Score: ${item.smartScore}/100
+${reason(item)}`
+      ).join('\n\n')
+    : '';
+
+  return en
+    ? `🔍 No immediate-entry trade is available right now.
+
+The strict execution filters rejected the current setups.
+${near ? `\nClosest opportunities:\n\n${near}\n` : ''}
+🛡️ “Trade Now” only returns setups ready for immediate scalping entry.`
+    : `🔍 لا توجد صفقة دخول فوري مناسبة حاليًا.
+
+فلاتر التنفيذ الصارمة رفضت الفرص الحالية.
+${near ? `\nأقرب الفرص:\n\n${near}\n` : ''}
+🛡️ «صفقة الآن» لا تعرض إلا صفقة جاهزة للدخول الفوري في السكالبينج.`;
+}
+
 async function calculateSignalLab() {
   const results = [];
 
@@ -588,6 +671,57 @@ function registerUserCommands(bot) {
     });
   });
 
+  // BEST_OPPORTUNITY_V2_HANDLER
+  bot.hears(['🏆 أفضل صفقة', '🏆 أفضل فرصة', '🏆 Best Trade', '🏆 Best Opportunity'], async (ctx) => {
+    try {
+      await ctx.reply(
+        isEnglish(ctx)
+          ? '🏆 Searching for the strongest current opportunity...'
+          : '🏆 جاري البحث عن أقوى فرصة موجودة حاليًا...'
+      );
+
+      const rows = await scanMarkets();
+
+      const ranked = (Array.isArray(rows) ? rows : [])
+        .filter((row) => row && (row.action === 'BUY' || row.action === 'SELL'))
+        .sort((a, b) => {
+          const aReady = a.scalpEntry?.status === 'ENTRY_READY' ? 1 : 0;
+          const bReady = b.scalpEntry?.status === 'ENTRY_READY' ? 1 : 0;
+          if (bReady !== aReady) return bReady - aReady;
+
+          const aiA = Number(a.confidence) || 0;
+          const aiB = Number(b.confidence) || 0;
+          if (aiB !== aiA) return aiB - aiA;
+
+          return Number(b.score || 0) - Number(a.score || 0);
+        });
+
+      const bestOpportunity = ranked[0];
+
+      if (!bestOpportunity) {
+        return ctx.reply(
+          isEnglish(ctx)
+            ? '🔍 No clear market opportunity is available right now.'
+            : '🔍 لا توجد فرصة واضحة في السوق حاليًا.',
+          keyboard(ctx)
+        );
+      }
+
+      return ctx.reply(
+        bestOpportunityTextV2(ctx, bestOpportunity),
+        keyboard(ctx)
+      );
+    } catch (error) {
+      console.log('❌ Best Opportunity V2 error:', error.stack || error);
+      return ctx.reply(
+        isEnglish(ctx)
+          ? '❌ Best Opportunity is temporarily unavailable.'
+          : '❌ تعذر عرض أفضل فرصة حاليًا. حاول مرة أخرى بعد قليل.',
+        keyboard(ctx)
+      );
+    }
+  });
+
   bot.hears('⚡ صفقة الآن', async (ctx) => {
     try {
       await ctx.reply(
@@ -615,48 +749,9 @@ function registerUserCommands(bot) {
       const trade = await getBestTrade();
 
       if (!trade) {
-        const rejected = getLastRejectedCandidates(2);
-
-        const reasonText = (item, en) => {
-          if (item.reason === 'AI_MISSING') {
-            return en
-              ? '❌ AI confirmation unavailable'
-              : '❌ تأكيد AI غير متاح';
-          }
-
-          if (item.reason === 'AI_MISMATCH') {
-            return en
-              ? '❌ AI direction disagrees with scanner'
-              : '❌ اتجاه AI مختلف عن اتجاه الماسح';
-          }
-
-          return en
-            ? `❌ AI confidence ${item.aiConfidence}% — minimum 60%`
-            : `❌ ثقة AI ${item.aiConfidence}% — الحد الأدنى 60%`;
-        };
-
-        const nearText = rejected.length
-          ? rejected.map((item, index) =>
-              `${index === 0 ? '🥇' : '🥈'} ${item.pair} — ${item.action}
-⭐ Smart Score: ${item.smartScore}/100
-${reasonText(item, isEnglish(ctx))}`
-            ).join('\n\n')
-          : '';
-
+        const rejected = getLastRejectedCandidates(3);
         return ctx.reply(
-          isEnglish(ctx)
-            ? `🔍 No high-quality trade is available right now.
-
-The bot rejected the current opportunities because the safety conditions are incomplete.
-${nearText ? `\nClosest opportunities:\n\n${nearText}\n` : ''}
-🛡️ The bot prefers no trade over an unconfirmed setup.
-🟢 Market monitoring continues.`
-            : `🔍 لا توجد صفقة قوية مناسبة حاليًا.
-
-البوت رفض الفرص الحالية لأن شروط الأمان لم تكتمل.
-${nearText ? `\nأقرب الفرص:\n\n${nearText}\n` : ''}
-🛡️ البوت يفضّل عدم الدخول بدل إرسال صفقة غير مؤكدة.
-🟢 السوق تحت المراقبة.`,
+          noTradeTextV2(ctx, rejected),
           keyboard(ctx)
         );
       }

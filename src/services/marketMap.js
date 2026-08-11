@@ -41,17 +41,101 @@ function sessionBonus(pair, session) {
 function decisionScore(item, session) {
   let score = Number(item.score) || 0;
 
-  if (item.status === 'ENTRY_READY') score += 12;
-  else if (item.status === 'WAIT_PULLBACK') score += 6;
-  else if (item.status === 'TREND_FOUND') score += 3;
+  const status = String(item.status || '');
+  const ai = Number(item.aiConfidence);
+  const adx = Number(item.adx);
 
-  score += sessionBonus(item.pair, session);
+  // ==========================================
+  // 5M / ENTRY QUALITY — أهم عنصر للسكالبينج
+  // ==========================================
 
-  if (Number(item.aiConfidence) >= 80) score += 4;
-  if (Number(item.adx) >= 30) score += 4;
-  if (Number(item.adx) >= 35) score += 2;
+  if (status === 'ENTRY_READY') {
+    score += 18;
+  } else if (status === 'WAIT_PULLBACK') {
+    score -= 6;
+  } else if (status === 'TREND_FOUND') {
+    // الترند وحده ليس إشارة دخول
+    score -= 10;
+  } else if (
+    status === 'WAIT' ||
+    status === 'VOLATILITY_TOO_LOW'
+  ) {
+    score -= 15;
+  } else if (status === 'REJECT') {
+    score -= 25;
+  }
 
-  return Math.round(Math.max(0, Math.min(100, score)));
+  // ==========================================
+  // AI CONFIDENCE
+  // ==========================================
+
+  if (Number.isFinite(ai)) {
+    if (ai >= 70) {
+      score += 10;
+    } else if (ai >= 65) {
+      score += 7;
+    } else if (ai >= 60) {
+      score += 4;
+    } else {
+      // أقل من الحد المطلوب للدخول
+      score -= 18;
+    }
+  } else {
+    score -= 15;
+  }
+
+  // ==========================================
+  // ADX — عامل مساعد فقط
+  // ==========================================
+
+  if (Number.isFinite(adx)) {
+    if (adx >= 25 && adx <= 38) {
+      score += 4;
+    } else if (adx >= 20) {
+      score += 2;
+    } else {
+      score -= 4;
+    }
+  }
+
+  // الجلسة Bonus صغير فقط
+  score += Math.min(
+    sessionBonus(item.pair, session),
+    4
+  );
+
+  // ==========================================
+  // HARD CAPS
+  // ==========================================
+
+  // AI أقل من 60% لا يجوز أن تظهر الفرصة Elite
+  if (!Number.isFinite(ai) || ai < 60) {
+    score = Math.min(score, 59);
+  }
+
+  // مجرد TREND بدون دخول جاهز
+  if (status === 'TREND_FOUND') {
+    score = Math.min(score, 64);
+  }
+
+  if (status === 'WAIT_PULLBACK') {
+    score = Math.min(score, 69);
+  }
+
+  if (
+    status === 'WAIT' ||
+    status === 'VOLATILITY_TOO_LOW'
+  ) {
+    score = Math.min(score, 55);
+  }
+
+  if (status === 'REJECT') {
+    score = Math.min(score, 40);
+  }
+
+  return Math.round(
+    Math.max(0, Math.min(100, score))
+  );
 }
 
 async function buildMarketMap() {
@@ -64,9 +148,13 @@ async function buildMarketMap() {
       marketScore: decisionScore(item, session)
     }))
     .sort((a, b) => {
-      const byStatus = rankStatus(b.status) - rankStatus(a.status);
-      if (byStatus !== 0) return byStatus;
-      return b.marketScore - a.marketScore;
+      // Scalping First:
+      // التقييم الفعلي أهم من مجرد وجود ترند
+      if (b.marketScore !== a.marketScore) {
+        return b.marketScore - a.marketScore;
+      }
+
+      return rankStatus(b.status) - rankStatus(a.status);
     });
 
   let bestTrade = null;

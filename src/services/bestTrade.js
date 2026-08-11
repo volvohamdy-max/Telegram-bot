@@ -135,6 +135,16 @@ async function getBestTrade() {
             console.log(
                 `❌ 5M entry confirmation missing: ${candidate.pair} / ${candidate.scalpEntry?.status || 'NONE'}`
             );
+
+            lastRejectedCandidates.push({
+                pair: candidate.pair,
+                action: candidate.action || 'WAIT',
+                smartScore: Number(candidate.score || 0),
+                aiConfidence: Number(candidate.confidence || 0),
+                reason: 'SCALP_NOT_READY',
+                scalpStatus: candidate.scalpEntry?.status || 'NONE'
+            });
+
             continue;
         }
 
