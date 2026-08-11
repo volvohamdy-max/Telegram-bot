@@ -7,3 +7,10 @@ data/bot.sqlite
 data/bot.sqlite
 src/commands/*.backup
 src/commands/*.sprint*-backup
+
+# Local backups and logs
+*.log
+*.backup
+*-backup
+*.newsv3-backup
+*.performance-v1-backup
