@@ -67,13 +67,324 @@ function minutesUntil(event) {
 
 function formatLocalTime(event) {
   const d = new Date(event.date);
+
   return Number.isNaN(d.getTime())
     ? event.date
-    : d.toLocaleString('en-GB', {
+    : d.toLocaleString('ar-EG', {
         timeZone: process.env.NEWS_TIMEZONE || 'Africa/Cairo',
         hour12: true
       });
 }
+
+// ==========================================
+// العملات الرئيسية التي يهتم بها البوت
+// ==========================================
+
+const IMPORTANT_NEWS_CURRENCIES =
+  new Set(['USD', 'EUR', 'GBP', 'JPY']);
+
+function isImportantCurrency(event) {
+  return IMPORTANT_NEWS_CURRENCIES.has(
+    String(event.currency || '').toUpperCase()
+  );
+}
+
+function currencyArabic(currency) {
+  const code =
+    String(currency || '').toUpperCase();
+
+  const names = {
+    USD: '🇺🇸 الدولار الأمريكي',
+    EUR: '🇪🇺 اليورو',
+    GBP: '🇬🇧 الجنيه الإسترليني',
+    JPY: '🇯🇵 الين الياباني'
+  };
+
+  return names[code] || code || '-';
+}
+
+// ==========================================
+// ترجمة أهم الأخبار الاقتصادية
+// ==========================================
+
+function translateNewsArabic(title) {
+  const raw = String(title || '').trim();
+  const t = raw.toLowerCase();
+
+  const rules = [
+    ['consumer price index', 'مؤشر أسعار المستهلكين'],
+    ['core consumer price index', 'مؤشر أسعار المستهلكين الأساسي'],
+    ['core cpi', 'مؤشر أسعار المستهلكين الأساسي'],
+    ['cpi', 'مؤشر أسعار المستهلكين'],
+
+    ['producer price index', 'مؤشر أسعار المنتجين'],
+    ['core ppi', 'مؤشر أسعار المنتجين الأساسي'],
+    ['ppi', 'مؤشر أسعار المنتجين'],
+
+    ['nonfarm payrolls', 'الوظائف غير الزراعية'],
+    ['non-farm payrolls', 'الوظائف غير الزراعية'],
+    ['non farm payrolls', 'الوظائف غير الزراعية'],
+    ['nfp', 'الوظائف غير الزراعية'],
+
+    ['unemployment rate', 'معدل البطالة'],
+    ['unemployment claims', 'طلبات إعانة البطالة'],
+    ['initial jobless claims', 'طلبات إعانة البطالة الأولية'],
+    ['jobless claims', 'طلبات إعانة البطالة'],
+
+    ['average hourly earnings', 'متوسط الأجور في الساعة'],
+    ['employment change', 'التغير في التوظيف'],
+
+    ['gross domestic product', 'الناتج المحلي الإجمالي'],
+    ['gdp', 'الناتج المحلي الإجمالي'],
+
+    ['retail sales', 'مبيعات التجزئة'],
+    ['core retail sales', 'مبيعات التجزئة الأساسية'],
+
+    ['interest rate decision', 'قرار سعر الفائدة'],
+    ['interest rate', 'سعر الفائدة'],
+    ['rate decision', 'قرار سعر الفائدة'],
+
+    ['fomc statement', 'بيان الاحتياطي الفيدرالي'],
+    ['fomc minutes', 'محضر اجتماع الاحتياطي الفيدرالي'],
+    ['fed chair', 'رئيس الاحتياطي الفيدرالي'],
+    ['federal reserve', 'الاحتياطي الفيدرالي'],
+
+    ['ecb interest rate decision', 'قرار البنك المركزي الأوروبي بشأن الفائدة'],
+    ['ecb press conference', 'المؤتمر الصحفي للبنك المركزي الأوروبي'],
+    ['ecb', 'البنك المركزي الأوروبي'],
+
+    ['boe interest rate decision', 'قرار بنك إنجلترا بشأن الفائدة'],
+    ['bank of england', 'بنك إنجلترا'],
+    ['boe', 'بنك إنجلترا'],
+
+    ['boj interest rate decision', 'قرار بنك اليابان بشأن الفائدة'],
+    ['bank of japan', 'بنك اليابان'],
+    ['boj', 'بنك اليابان'],
+
+    ['manufacturing pmi', 'مؤشر مديري المشتريات الصناعي'],
+    ['services pmi', 'مؤشر مديري المشتريات الخدمي'],
+    ['composite pmi', 'مؤشر مديري المشتريات المركب'],
+    ['pmi', 'مؤشر مديري المشتريات'],
+
+    ['ism manufacturing', 'مؤشر ISM الصناعي'],
+    ['ism services', 'مؤشر ISM الخدمي'],
+
+    ['consumer confidence', 'ثقة المستهلك'],
+    ['consumer sentiment', 'معنويات المستهلك'],
+    ['business confidence', 'ثقة الأعمال'],
+
+    ['industrial production', 'الإنتاج الصناعي'],
+    ['manufacturing production', 'الإنتاج التصنيعي'],
+
+    ['trade balance', 'الميزان التجاري'],
+    ['current account', 'الحساب الجاري'],
+
+    ['durable goods orders', 'طلبات السلع المعمرة'],
+    ['factory orders', 'طلبات المصانع'],
+
+    ['housing starts', 'بدء بناء المنازل'],
+    ['building permits', 'تصاريح البناء'],
+    ['existing home sales', 'مبيعات المنازل القائمة'],
+    ['new home sales', 'مبيعات المنازل الجديدة'],
+
+    ['wage growth', 'نمو الأجور'],
+    ['inflation rate', 'معدل التضخم']
+  ];
+
+  for (const [english, arabic] of rules) {
+    if (t.includes(english)) {
+      return arabic;
+    }
+  }
+
+  // لو عندك translateNews القديمة وترجمت العنوان بالفعل
+  try {
+    const translated = translateNews(raw);
+
+    if (
+      translated &&
+      translated !== raw
+    ) {
+      return translated;
+    }
+  } catch {}
+
+  // ما نعرضش عنوان إنجليزي طويل للمستخدم
+  return 'خبر اقتصادي مهم';
+}
+
+
+
+
+function isImportantNewsCurrency(event) {
+  return IMPORTANT_NEWS_CURRENCIES.has(
+    String(event.currency || '').toUpperCase()
+  );
+}
+
+function translateEconomicTitle(title) {
+  const raw = String(title || '').trim();
+  const t = raw.toLowerCase();
+
+  const rules = [
+    ['core consumer price index', 'مؤشر أسعار المستهلكين الأساسي'],
+    ['consumer price index', 'مؤشر أسعار المستهلكين'],
+    ['core cpi', 'مؤشر أسعار المستهلكين الأساسي'],
+    ['cpi', 'مؤشر أسعار المستهلكين'],
+
+    ['core producer price index', 'مؤشر أسعار المنتجين الأساسي'],
+    ['producer price index', 'مؤشر أسعار المنتجين'],
+    ['core ppi', 'مؤشر أسعار المنتجين الأساسي'],
+    ['ppi', 'مؤشر أسعار المنتجين'],
+
+    ['nonfarm payrolls', 'الوظائف غير الزراعية'],
+    ['non-farm payrolls', 'الوظائف غير الزراعية'],
+    ['non farm payrolls', 'الوظائف غير الزراعية'],
+    ['nfp', 'الوظائف غير الزراعية'],
+
+    ['unemployment rate', 'معدل البطالة'],
+    ['initial jobless claims', 'طلبات إعانة البطالة الأولية'],
+    ['jobless claims', 'طلبات إعانة البطالة'],
+    ['unemployment claims', 'طلبات إعانة البطالة'],
+
+    ['average hourly earnings', 'متوسط الأجور في الساعة'],
+    ['employment change', 'التغير في التوظيف'],
+
+    ['gross domestic product', 'الناتج المحلي الإجمالي'],
+    ['gdp', 'الناتج المحلي الإجمالي'],
+
+    ['core retail sales', 'مبيعات التجزئة الأساسية'],
+    ['retail sales', 'مبيعات التجزئة'],
+
+    ['interest rate decision', 'قرار سعر الفائدة'],
+    ['rate decision', 'قرار سعر الفائدة'],
+
+    ['fomc statement', 'بيان الاحتياطي الفيدرالي'],
+    ['fomc minutes', 'محضر اجتماع الاحتياطي الفيدرالي'],
+    ['federal reserve', 'الاحتياطي الفيدرالي'],
+
+    ['ecb press conference', 'المؤتمر الصحفي للبنك المركزي الأوروبي'],
+    ['ecb interest rate', 'قرار فائدة البنك المركزي الأوروبي'],
+
+    ['boe interest rate', 'قرار فائدة بنك إنجلترا'],
+    ['bank of england', 'بنك إنجلترا'],
+
+    ['boj interest rate', 'قرار فائدة بنك اليابان'],
+    ['bank of japan', 'بنك اليابان'],
+
+    ['manufacturing pmi', 'مؤشر مديري المشتريات الصناعي'],
+    ['services pmi', 'مؤشر مديري المشتريات الخدمي'],
+    ['composite pmi', 'مؤشر مديري المشتريات المركب'],
+    ['pmi', 'مؤشر مديري المشتريات'],
+
+    ['ism manufacturing', 'مؤشر ISM الصناعي'],
+    ['ism services', 'مؤشر ISM الخدمي'],
+
+    ['consumer confidence', 'ثقة المستهلك'],
+    ['consumer sentiment', 'معنويات المستهلك'],
+
+    ['industrial production', 'الإنتاج الصناعي'],
+    ['manufacturing production', 'الإنتاج التصنيعي'],
+
+    ['trade balance', 'الميزان التجاري'],
+    ['current account', 'الحساب الجاري'],
+
+    ['durable goods orders', 'طلبات السلع المعمرة'],
+    ['factory orders', 'طلبات المصانع'],
+
+    ['housing starts', 'بدء بناء المنازل'],
+    ['building permits', 'تصاريح البناء'],
+    ['existing home sales', 'مبيعات المنازل القائمة'],
+    ['new home sales', 'مبيعات المنازل الجديدة'],
+
+    ['inflation rate', 'معدل التضخم'],
+    ['wage growth', 'نمو الأجور']
+  ];
+
+  for (const [en, ar] of rules) {
+    if (t.includes(en)) {
+      return ar;
+    }
+  }
+
+  try {
+    const translated = translateNews(raw);
+
+    if (
+      translated &&
+      translated !== raw
+    ) {
+      return translated;
+    }
+  } catch {}
+
+  return 'خبر اقتصادي مهم';
+}
+
+function assetsArabic(event) {
+  const c =
+    String(event.currency || '').toUpperCase();
+
+  if (c === 'USD') {
+    return `🥇 الذهب XAUUSD
+💵 الدولار الأمريكي
+🇪🇺 EURUSD
+🇬🇧 GBPUSD
+🇯🇵 USDJPY`;
+  }
+
+  if (c === 'EUR') {
+    return `🇪🇺 اليورو
+📊 EURUSD
+📊 EURJPY
+📊 EURGBP`;
+  }
+
+  if (c === 'GBP') {
+    return `🇬🇧 الجنيه الإسترليني
+📊 GBPUSD
+📊 GBPJPY
+📊 EURGBP`;
+  }
+
+  if (c === 'JPY') {
+    return `🇯🇵 الين الياباني
+📊 USDJPY
+📊 EURJPY
+📊 GBPJPY`;
+  }
+
+  return assetsLine(event);
+}
+
+function buildNewsAnalysisPrompt(event) {
+  return `
+حلل الخبر الاقتصادي التالي باللغة العربية فقط وباختصار.
+
+العملة:
+${event.currency || '-'}
+
+الخبر:
+${event.title || '-'}
+
+Actual:
+${event.actual ?? '-'}
+
+Forecast:
+${event.forecast ?? '-'}
+
+Previous:
+${event.previous ?? '-'}
+
+المطلوب:
+- هل النتيجة أقوى أم أضعف من المتوقع؟
+- التأثير المحتمل على العملة.
+- إذا كانت العملة USD اذكر التأثير المحتمل على الذهب XAUUSD.
+- لا تعط ضمان ربح.
+- اجعل الإجابة في 3 إلى 5 سطور واضحة.
+`.trim();
+}
+
 
 async function checkUpcomingNews(bot) {
   const { data, providers } = await getMultiSourceCalendar();
@@ -84,6 +395,7 @@ async function checkUpcomingNews(bot) {
   }
 
   for (const event of data) {
+    if (!isImportantCurrency(event)) continue;
     if (!isHighImpact(event)) continue;
 
     const diff = minutesUntil(event);
@@ -110,17 +422,17 @@ async function checkUpcomingNews(bot) {
     const urgent = stage === '5m';
 
     const message = `
-${urgent ? '🔴 <b>NEWS RISK MODE</b>' : '🚨 <b>تنبيه خبر اقتصادي قوي</b>'}
+${urgent ? '🔴 <b>وضع خطر الأخبار</b>' : '🚨 <b>تنبيه خبر اقتصادي قوي</b>'}
 
-💱 العملة: <b>${event.currency || '-'}</b>
-📰 الخبر: <b>${translateNews(event.title)}</b>
+💱 العملة: <b>${currencyArabic(event.currency)}</b>
+📰 الخبر: <b>${translateNewsArabic(event.title)}</b>
 ⏰ الموعد: ${formatLocalTime(event)}
 ⏳ باقي حوالي: <b>${label}</b>
 
 🔴 التأثير: مرتفع
 
-🥇 الأصول المتأثرة:
-${assetsLine(event)}
+📊 الأصول المتأثرة:
+${assetsArabic(event)}
 
 ${sourceLine(event)}
 
@@ -142,6 +454,7 @@ async function checkEconomicNews(bot) {
   if (!providers.length) return;
 
   for (const event of data) {
+    if (!isImportantCurrency(event)) continue;
     if (!isHighImpact(event)) continue;
 
     const diff = minutesUntil(event);
@@ -154,11 +467,109 @@ async function checkEconomicNews(bot) {
 
     if (seen(key)) continue;
 
+    // ==========================================
+    // RELEASE DATA PROTECTION
+    // Do not send the release until Actual exists.
+    // Force-refresh providers because the normal
+    // calendar cache may still contain pre-release data.
+    // ==========================================
+
+    const hasValue = (value) =>
+      value !== null &&
+      value !== undefined &&
+      String(value).trim() !== '' &&
+      String(value).trim() !== '-';
+
+    if (!hasValue(event.actual)) {
+      console.log(
+        `⏳ Released news waiting for Actual: ${event.title}`
+      );
+
+      try {
+        const refreshed =
+          await getMultiSourceCalendar(true);
+
+        const normalize = (text) =>
+          String(text || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const targetTitle = normalize(event.title);
+
+        const freshEvent = refreshed.data.find((candidate) => {
+          if (
+            String(candidate.currency || '').toUpperCase() !==
+            String(event.currency || '').toUpperCase()
+          ) {
+            return false;
+          }
+
+          const candidateTitle = normalize(candidate.title);
+
+          if (
+            candidateTitle !== targetTitle &&
+            !candidateTitle.includes(targetTitle) &&
+            !targetTitle.includes(candidateTitle)
+          ) {
+            return false;
+          }
+
+          const a = new Date(candidate.date).getTime();
+          const b = new Date(event.date).getTime();
+
+          return (
+            Number.isFinite(a) &&
+            Number.isFinite(b) &&
+            Math.abs(a - b) <= 15 * 60 * 1000
+          );
+        });
+
+        if (freshEvent) {
+          event.actual =
+            freshEvent.actual ?? event.actual;
+
+          event.forecast =
+            freshEvent.forecast ?? event.forecast;
+
+          event.previous =
+            freshEvent.previous ?? event.previous;
+
+          event.sources =
+            freshEvent.sources ?? event.sources;
+
+          event.sourceCount =
+            freshEvent.sourceCount ?? event.sourceCount;
+        }
+
+      } catch (refreshError) {
+        console.log(
+          '⚠️ Released-news refresh failed:',
+          refreshError.message
+        );
+      }
+
+      if (!hasValue(event.actual)) {
+        console.log(
+          `⏳ Actual still unavailable, release deferred: ${event.title}`
+        );
+
+        // IMPORTANT:
+        // Do NOT mark as seen.
+        // Next news cycle will retry.
+        continue;
+      }
+    }
+
+    // Only mark once we have real release data.
     mark(key);
 
     let ai = '';
     try {
-      ai = await analyzeNews(event.title);
+      ai = await analyzeNews(
+        buildNewsAnalysisPrompt(event)
+      );
     } catch (error) {
       console.log('News AI analysis failed:', error.message);
     }
@@ -166,15 +577,15 @@ async function checkEconomicNews(bot) {
     const message = `
 ✅ <b>صدر الخبر الاقتصادي</b>
 
-💱 العملة: <b>${event.currency || '-'}</b>
-📰 الخبر: <b>${translateNews(event.title)}</b>
+💱 العملة: <b>${currencyArabic(event.currency)}</b>
+📰 الخبر: <b>${translateNewsArabic(event.title)}</b>
 
-📊 Actual: ${event.actual ?? '-'}
-📈 Forecast: ${event.forecast ?? '-'}
-📉 Previous: ${event.previous ?? '-'}
+📊 الفعلي: ${event.actual ?? '-'}
+📈 المتوقع: ${event.forecast ?? '-'}
+📉 السابق: ${event.previous ?? '-'}
 
-🥇 الأصول المتأثرة:
-${assetsLine(event)}
+📊 الأصول المتأثرة:
+${assetsArabic(event)}
 
 ${sourceLine(event)}
 

@@ -2,12 +2,16 @@ const os = require('os');
 const db = require('../database/db');
 const { requireAdmin } = require('../utils/auth');
 const config = require('../config');
+const { analyzeGoldIntelligence } = require('../services/indicatorIntelligence');
 const {
   getStats: getPerformanceStats
 } = require('../database/performance');
 const {
-  getOpenTrades
+  getOpenTrades,
+  addTrade
 } = require('../database/trades');
+
+const { getPrice, getCandles } = require('../services/marketService');
 const {
   getLastRejectedCandidates
 } = require('../services/bestTrade');
@@ -20,7 +24,10 @@ const {
 const {
   adminV21Keyboard,
   controlsV21Keyboard,
-  maintenanceConfirmKeyboard
+  maintenanceConfirmKeyboard,
+  manualSignalTypeKeyboard,
+  manualSignalDirectionKeyboard,
+  manualSignalConfirmKeyboard
 } = require('../keyboards/adminV21');
 
 function safeCount(sql, params = []) {
@@ -58,6 +65,385 @@ function uptimeText() {
 
 function currentSettings() {
   return getAllSettings();
+}
+
+const manualSignalDrafts = new Map();
+
+function calcAtr(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) {
+    return null;
+  }
+
+  const rows = candles.slice(-(period + 1));
+  const ranges = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const high = Number(rows[i].high);
+    const low = Number(rows[i].low);
+    const prevClose = Number(rows[i - 1].close);
+
+    if (
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(prevClose)
+    ) {
+      continue;
+    }
+
+    ranges.push(
+      Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose)
+      )
+    );
+  }
+
+  if (!ranges.length) return null;
+
+  return ranges.reduce((a, b) => a + b, 0) / ranges.length;
+}
+
+async function buildManualGoldSignal(type, direction) {
+  const pair = 'XAUUSD';
+
+  const isScalp = type === 'SCALP';
+
+  const timeframe = isScalp
+    ? '5min'
+    : '15min';
+
+  const [priceRaw, candles, intelligence] = await Promise.all([
+    getPrice(pair),
+    getCandles(pair, timeframe),
+
+    analyzeGoldIntelligence()
+      .catch(error => {
+        console.log(
+          'Market Intelligence error:',
+          error.message
+        );
+
+        return null;
+      })
+  ]);
+
+  const entry = Number(priceRaw);
+  const atr = calcAtr(candles, 14);
+
+  if (!Number.isFinite(entry)) {
+    throw new Error('Invalid XAUUSD price');
+  }
+
+  if (!Number.isFinite(atr) || atr <= 0) {
+    throw new Error('Invalid XAUUSD ATR');
+  }
+
+  // ======================================
+  // SCALPING
+  // ======================================
+
+  const riskMultiplier = isScalp
+    ? 1.20
+    : 1.20;
+
+  const minRisk = isScalp
+    ? 3.0
+    : 3.5;
+
+  const tp1R = isScalp
+    ? 1.20
+    : 1.50;
+
+  const tp2R = isScalp
+    ? 2.00
+    : 2.50;
+
+  const atrRisk = Math.max(
+    atr * riskMultiplier,
+    minRisk
+  );
+
+  let risk = atrRisk;
+
+  // ======================================
+  // Smart Scalping SL
+  // Uses market structure when available
+  // ======================================
+
+  if (isScalp && intelligence?.structure) {
+
+    const margin =
+      Math.max(
+        atr * 0.15,
+        0.5
+      );
+
+    if (
+      direction === 'BUY' &&
+      Number.isFinite(
+        Number(
+          intelligence.structure.lastSwingLow
+        )
+      )
+    ) {
+
+      const swingLow =
+        Number(
+          intelligence.structure.lastSwingLow
+        );
+
+      const swingRisk =
+        entry - swingLow + margin;
+
+      if (swingRisk > 0) {
+        risk = Math.max(
+          risk,
+          swingRisk
+        );
+      }
+    }
+
+    if (
+      direction === 'SELL' &&
+      Number.isFinite(
+        Number(
+          intelligence.structure.lastSwingHigh
+        )
+      )
+    ) {
+
+      const swingHigh =
+        Number(
+          intelligence.structure.lastSwingHigh
+        );
+
+      const swingRisk =
+        swingHigh - entry + margin;
+
+      if (swingRisk > 0) {
+        risk = Math.max(
+          risk,
+          swingRisk
+        );
+      }
+    }
+
+    // Prevent absurdly wide scalp stops
+    const maxRisk =
+      Math.max(
+        atr * 2.20,
+        7.5
+      );
+
+    risk = Math.min(
+      risk,
+      maxRisk
+    );
+  }
+
+  const sl =
+    direction === 'BUY'
+      ? entry - risk
+      : entry + risk;
+
+  const tp1 =
+    direction === 'BUY'
+      ? entry + risk * tp1R
+      : entry - risk * tp1R;
+
+  const tp2 =
+    direction === 'BUY'
+      ? entry + risk * tp2R
+      : entry - risk * tp2R;
+
+  const zone = Math.max(
+    isScalp ? 0.5 : 1.0,
+    atr * (isScalp ? 0.18 : 0.25)
+  );
+
+  return {
+    pair,
+    type,
+    timeframe,
+    direction,
+
+    entry,
+
+    entryFrom:
+      entry - zone,
+
+    entryTo:
+      entry + zone,
+
+    sl,
+    tp1,
+    tp2,
+
+    atr,
+
+    rrTp1: tp1R,
+    rrTp2: tp2R,
+
+    intelligence
+  };
+}
+
+function marketIntelligenceText(draft) {
+  const intel = draft.intelligence;
+
+  if (!intel) {
+    return `🧠 تحليل السوق
+⚠️ غير متاح حاليًا`;
+  }
+
+  const selected =
+    draft.direction;
+
+  const marketBias =
+    intel.bias || 'NEUTRAL';
+
+  const confidence =
+    Number.isFinite(Number(intel.confidence))
+      ? Number(intel.confidence)
+      : 0;
+
+  const adx =
+    intel.adx;
+
+  const structure =
+    intel.structure?.structure || 'UNKNOWN';
+
+  const bos =
+    intel.bos || 'NONE';
+
+  const choch =
+    intel.choch || 'NONE';
+
+  let agreementText = '';
+
+  if (marketBias === 'NEUTRAL') {
+    agreementText =
+      '⚪ السوق غير حاسم حاليًا';
+  } else if (marketBias === selected) {
+    agreementText =
+      `✅ اختيارك ${selected} متوافق مع تحليل السوق`;
+  } else {
+    agreementText =
+      `⚠️ اختيارك ${selected} عكس ميل السوق ${marketBias}`;
+  }
+
+  const adxText =
+    adx
+      ? `${adx.adx.toFixed(1)} — ${adx.strength} / ${adx.direction}`
+      : 'غير متاح';
+
+  const structureArabic = {
+    BULLISH: 'صاعد',
+    BEARISH: 'هابط',
+    MIXED: 'مختلط',
+    RANGE: 'عرضي'
+  }[structure] || structure;
+
+  return `🧠 Market Intelligence
+
+📊 ميل السوق: ${marketBias}
+🔥 الثقة: ${confidence}%
+
+${agreementText}
+
+📈 ADX:
+${adxText}
+
+🏗️ هيكل السوق:
+${structureArabic}
+
+🔹 BOS: ${bos}
+🔸 CHoCH: ${choch}`;
+}
+
+function manualSignalPreviewText(draft) {
+  const icon =
+    draft.direction === 'BUY'
+      ? '📈'
+      : '📉';
+
+  const typeText =
+    draft.type === 'SCALP'
+      ? '⚡ SCALPING'
+      : '📈 INTRADAY';
+
+  return `📋 معاينة إشارة الذهب
+
+🥇 الزوج: XAUUSD
+${icon} الاتجاه: ${draft.direction}
+
+${typeText}
+⏱️ الفريم: ${draft.timeframe}
+
+📍 منطقة الدخول
+${draft.entryFrom.toFixed(2)} ➜ ${draft.entryTo.toFixed(2)}
+
+🛑 وقف الخسارة
+${draft.sl.toFixed(2)}
+
+🎯 الهدف الأول
+${draft.tp1.toFixed(2)}
+
+🎯 الهدف الثاني
+${draft.tp2.toFixed(2)}
+
+📊 ATR
+${draft.atr.toFixed(2)}
+
+⚖️ العائد للمخاطرة
+TP1 → 1:${draft.rrTp1.toFixed(2)}
+TP2 → 1:${draft.rrTp2.toFixed(2)}
+
+${marketIntelligenceText(draft)}
+
+هل تريد إرسال الإشارة؟`;
+}
+
+function manualSignalSendText(draft) {
+  const icon =
+    draft.direction === 'BUY'
+      ? '📈'
+      : '📉';
+
+  const typeText =
+    draft.type === 'SCALP'
+      ? '⚡ SCALPING'
+      : '📈 INTRADAY';
+
+  return `🚨 إشارة ذهب جديدة
+
+🥇 الزوج: XAUUSD
+${icon} الاتجاه: ${draft.direction}
+
+${typeText}
+⏱️ الفريم: ${draft.timeframe}
+
+📍 منطقة الدخول
+${draft.entryFrom.toFixed(2)} ➜ ${draft.entryTo.toFixed(2)}
+
+🛑 وقف الخسارة
+${draft.sl.toFixed(2)}
+
+🎯 الهدف الأول
+${draft.tp1.toFixed(2)}
+
+🎯 الهدف الثاني
+${draft.tp2.toFixed(2)}
+
+📊 ATR
+${draft.atr.toFixed(2)}
+
+⚖️ العائد للمخاطرة
+TP1 → 1:${draft.rrTp1.toFixed(2)}
+TP2 → 1:${draft.rrTp2.toFixed(2)}
+
+🤖 Forex AI Bot`;
 }
 
 function dashboardText() {
@@ -379,6 +765,229 @@ function registerAdminV21(bot) {
     if (!requireAdmin(ctx)) return;
     return replyOrEdit(ctx, dashboardText(), adminV21Keyboard());
   });
+
+  bot.action('adminv21_manual_signal', async (ctx) => {
+    if (!requireAdmin(ctx)) return;
+
+    return replyOrEdit(
+      ctx,
+      `📣 إرسال إشارة ذهب
+
+اختر نوع الصفقة:
+
+⚡ Scalping
+صفقة سريعة — فريم 5M
+
+📈 Intraday
+صفقة أوسع — فريم 15M`,
+      manualSignalTypeKeyboard()
+    );
+  });
+
+
+  bot.action(
+    'adminv21_manual_type_scalp',
+    async (ctx) => {
+
+      if (!requireAdmin(ctx)) return;
+
+      return replyOrEdit(
+        ctx,
+        `⚡ SCALPING
+
+اختر اتجاه الصفقة:`,
+        manualSignalDirectionKeyboard('SCALP')
+      );
+    }
+  );
+
+
+  bot.action(
+    'adminv21_manual_type_intraday',
+    async (ctx) => {
+
+      if (!requireAdmin(ctx)) return;
+
+      return replyOrEdit(
+        ctx,
+        `📈 INTRADAY
+
+اختر اتجاه الصفقة:`,
+        manualSignalDirectionKeyboard('INTRADAY')
+      );
+    }
+  );
+
+
+  bot.action(
+    /^adminv21_manual_(SCALP|INTRADAY)_(buy|sell)$/,
+    async (ctx) => {
+
+      if (!requireAdmin(ctx)) return;
+
+      const type =
+        ctx.match[1];
+
+      const direction =
+        ctx.match[2].toUpperCase();
+
+      try {
+
+        const draft =
+          await buildManualGoldSignal(
+            type,
+            direction
+          );
+
+        manualSignalDrafts.set(
+          String(ctx.from.id),
+          draft
+        );
+
+        return replyOrEdit(
+          ctx,
+          manualSignalPreviewText(draft),
+          manualSignalConfirmKeyboard(
+            type,
+            direction
+          )
+        );
+
+      } catch (error) {
+
+        console.log(
+          'Manual signal build error:',
+          error.message
+        );
+
+        return replyOrEdit(
+          ctx,
+          `❌ تعذر تجهيز الإشارة
+
+${error.message}`,
+          adminV21Keyboard()
+        );
+      }
+    }
+  );
+
+
+  bot.action(
+    /^adminv21_manual_confirm_(SCALP|INTRADAY)_(BUY|SELL)$/,
+    async (ctx) => {
+
+      if (!requireAdmin(ctx)) return;
+
+      const type =
+        ctx.match[1];
+
+      const direction =
+        ctx.match[2];
+
+      const key =
+        String(ctx.from.id);
+
+      const draft =
+        manualSignalDrafts.get(key);
+
+      if (
+        !draft ||
+        draft.type !== type ||
+        draft.direction !== direction
+      ) {
+
+        return replyOrEdit(
+          ctx,
+          '❌ المعاينة انتهت. جهز الإشارة مرة أخرى.',
+          adminV21Keyboard()
+        );
+      }
+
+
+      const message =
+        manualSignalSendText(draft);
+
+
+      let sentGroup = false;
+
+
+      if (config.mainGroupId) {
+
+        try {
+
+          await ctx.telegram.sendMessage(
+            config.mainGroupId,
+            message
+          );
+
+          sentGroup = true;
+
+        } catch (error) {
+
+          console.log(
+            'Manual signal group error:',
+            error.message
+          );
+        }
+      }
+
+
+      try {
+
+        addTrade({
+          telegram_id: 'ADMIN',
+          pair: 'XAUUSD',
+
+          action:
+            draft.direction,
+
+          entry:
+            draft.entry,
+
+          stop_loss:
+            draft.sl,
+
+          target1:
+            draft.tp1,
+
+          target2:
+            draft.tp2
+        });
+
+      } catch (error) {
+
+        console.log(
+          'Manual trade save error:',
+          error.message
+        );
+      }
+
+
+      manualSignalDrafts.delete(key);
+
+
+      return replyOrEdit(
+        ctx,
+        `✅ تم إرسال الإشارة
+
+${draft.type === 'SCALP'
+  ? '⚡ Scalping'
+  : '📈 Intraday'}
+
+${draft.direction === 'BUY'
+  ? '📈 BUY'
+  : '📉 SELL'}
+
+${sentGroup
+  ? '📣 تم الإرسال للجروب الرئيسي'
+  : '⚠️ لم يتم الإرسال للجروب'}
+
+📊 الصفقة دخلت Trade Monitor`,
+        adminV21Keyboard()
+      );
+    }
+  );
+
 
   bot.action('adminv21_live', async (ctx) => {
     if (!requireAdmin(ctx)) return;

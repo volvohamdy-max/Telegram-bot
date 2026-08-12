@@ -1,0 +1,752 @@
+const { getCandles } = require('./marketService');
+const { analyzePair } = require('./analysisGate');
+
+const STATE = {
+  lastSentAt: 0,
+  lastDirection: null,
+  lastEntryBucket: null
+};
+
+const CONFIG = {
+  pair: 'XAUUSD',
+  minAiA: 58,
+  minAiAPlus: 65,
+  minScoreA: 70,
+  minScoreAPlus: 80,
+  cooldownMs: 20 * 60 * 1000,
+  reverseCooldownMs: 10 * 60 * 1000
+};
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function ema(values, period) {
+  if (!Array.isArray(values) || values.length < period) return null;
+  const k = 2 / (period + 1);
+  let value = values[0];
+
+  for (let i = 1; i < values.length; i++) {
+    value = values[i] * k + value * (1 - k);
+  }
+
+  return value;
+}
+
+function rsi(values, period = 14) {
+  if (!Array.isArray(values) || values.length < period + 1) return null;
+
+  let gains = 0;
+  let losses = 0;
+
+  for (let i = values.length - period; i < values.length; i++) {
+    const diff = values[i] - values[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses += Math.abs(diff);
+  }
+
+  if (losses === 0) return 100;
+
+  const rs = (gains / period) / (losses / period);
+  return 100 - (100 / (1 + rs));
+}
+
+function atr(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return null;
+
+  const sample = candles.slice(-(period + 1));
+  const ranges = [];
+
+  for (let i = 1; i < sample.length; i++) {
+    const current = sample[i];
+    const prev = sample[i - 1];
+
+    const high = Number(current.high);
+    const low = Number(current.low);
+    const prevClose = Number(prev.close);
+
+    if (
+      !Number.isFinite(high) ||
+      !Number.isFinite(low) ||
+      !Number.isFinite(prevClose)
+    ) continue;
+
+    ranges.push(
+      Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose)
+      )
+    );
+  }
+
+  if (!ranges.length) return null;
+  return ranges.reduce((a, b) => a + b, 0) / ranges.length;
+}
+
+function recentMomentum(closes) {
+  if (!Array.isArray(closes) || closes.length < 5) {
+    return { direction: 'WAIT', strength: 0 };
+  }
+
+  const recent = closes.slice(-4);
+  let up = 0;
+  let down = 0;
+
+  for (let i = 1; i < recent.length; i++) {
+    if (recent[i] > recent[i - 1]) up++;
+    else if (recent[i] < recent[i - 1]) down++;
+  }
+
+  if (up >= 2) return { direction: 'BUY', strength: up };
+  if (down >= 2) return { direction: 'SELL', strength: down };
+
+  return { direction: 'WAIT', strength: Math.max(up, down) };
+}
+
+function get15mTrend(analysis) {
+  if (!analysis) return 'WAIT';
+
+  if (
+    analysis.technicalDirection === 'BUY' ||
+    analysis.technicalDirection === 'SELL'
+  ) {
+    return analysis.technicalDirection;
+  }
+
+  const ema20 = Number(analysis.indicators?.ema20);
+  const ema50 = Number(analysis.indicators?.ema50);
+
+  if (Number.isFinite(ema20) && Number.isFinite(ema50)) {
+    if (ema20 > ema50) return 'BUY';
+    if (ema20 < ema50) return 'SELL';
+  }
+
+  return 'WAIT';
+}
+
+function calculateScalpScore({
+  direction,
+  trend15,
+  ema9,
+  ema20,
+  rsi5,
+  momentum,
+  aiConfidence,
+  atr5,
+  entry
+}) {
+  let score = 0;
+  const reasons = [];
+
+  if (direction === trend15) {
+    score += 20;
+    reasons.push('15M trend aligned');
+  }
+
+  if (
+    Number.isFinite(ema9) &&
+    Number.isFinite(ema20)
+  ) {
+    const emaAligned =
+      (direction === 'BUY' && ema9 > ema20) ||
+      (direction === 'SELL' && ema9 < ema20);
+
+    if (emaAligned) {
+      score += 25;
+      reasons.push('5M EMA aligned');
+    }
+  }
+
+  if (momentum.direction === direction) {
+    score += momentum.strength >= 4 ? 20 : 15;
+    reasons.push('5M momentum aligned');
+  }
+
+  if (Number.isFinite(rsi5)) {
+    if (
+      direction === 'BUY' &&
+      rsi5 >= 52 &&
+      rsi5 <= 70
+    ) {
+      score += 10;
+      reasons.push('RSI healthy');
+    } else if (
+      direction === 'SELL' &&
+      rsi5 <= 48 &&
+      rsi5 >= 32
+    ) {
+      score += 10;
+      reasons.push('RSI healthy');
+    } else if (
+      direction === 'BUY' &&
+      rsi5 > 50 &&
+      rsi5 < 72
+    ) {
+      score += 6;
+    } else if (
+      direction === 'SELL' &&
+      rsi5 < 50 &&
+      rsi5 > 28
+    ) {
+      score += 6;
+    }
+  }
+
+  if (Number.isFinite(atr5) && Number.isFinite(entry) && atr5 > 0) {
+    const atrPct = (atr5 / entry) * 100;
+
+    if (atrPct >= 0.035 && atrPct <= 0.30) {
+      score += 10;
+      reasons.push('5M volatility usable');
+    } else if (atrPct > 0.015) {
+      score += 5;
+    }
+  }
+
+  if (Number.isFinite(aiConfidence)) {
+    if (aiConfidence >= 70) score += 15;
+    else if (aiConfidence >= 65) score += 12;
+    else if (aiConfidence >= 58) score += 8;
+    else if (aiConfidence >= 54) score += 3;
+  }
+
+  return {
+    score: clamp(Math.round(score), 0, 100),
+    reasons
+  };
+}
+
+function cooldownAllows(direction, entry, atr5) {
+  const now = Date.now();
+
+  if (!STATE.lastSentAt) {
+    return { allowed: true };
+  }
+
+  const elapsed = now - STATE.lastSentAt;
+  const reversing =
+    STATE.lastDirection &&
+    STATE.lastDirection !== direction;
+
+  const minWait = reversing
+    ? CONFIG.reverseCooldownMs
+    : CONFIG.cooldownMs;
+
+  if (elapsed >= minWait) {
+    return { allowed: true };
+  }
+
+  const bucketSize = Math.max(Number(atr5) || 1, 1);
+  const bucket = Math.round(Number(entry) / bucketSize);
+
+  if (
+    reversing &&
+    bucket !== STATE.lastEntryBucket
+  ) {
+    return { allowed: true };
+  }
+
+  return {
+    allowed: false,
+    reason: `COOLDOWN_${Math.ceil((minWait - elapsed) / 60000)}M`
+  };
+}
+
+function markSent(direction, entry, atr5) {
+  const bucketSize = Math.max(Number(atr5) || 1, 1);
+
+  STATE.lastSentAt = Date.now();
+  STATE.lastDirection = direction;
+  STATE.lastEntryBucket =
+    Math.round(Number(entry) / bucketSize);
+}
+
+async function scanGoldScalp() {
+  const pair = CONFIG.pair;
+
+  const [analysis15, candles5] = await Promise.all([
+    analyzePair(pair),
+    getCandles(pair, '5min')
+  ]);
+
+  if (!analysis15 || !Array.isArray(candles5) || candles5.length < 25) {
+    return {
+      ready: false,
+      status: 'NO_DATA',
+      pair
+    };
+  }
+
+  const closes = candles5
+    .map(c => Number(c.close))
+    .filter(Number.isFinite);
+
+  if (closes.length < 25) {
+    return {
+      ready: false,
+      status: 'NO_5M_DATA',
+      pair
+    };
+  }
+
+  const entry = closes[closes.length - 1];
+  const ema9 = ema(closes.slice(-30), 9);
+  const ema20 = ema(closes.slice(-35), 20);
+  const rsi5 = rsi(closes, 14);
+  const atr5 = atr(candles5, 14);
+  const momentum = recentMomentum(closes);
+  const trend15 = get15mTrend(analysis15);
+
+  let direction = 'WAIT';
+  let entryMode = 'NONE';
+
+  // ==========================================
+  // STRICT ENTRY
+  // ==========================================
+
+  if (
+    ema9 > ema20 &&
+    momentum.direction === 'BUY'
+  ) {
+    direction = 'BUY';
+    entryMode = 'STRICT';
+  } else if (
+    ema9 < ema20 &&
+    momentum.direction === 'SELL'
+  ) {
+    direction = 'SELL';
+    entryMode = 'STRICT';
+  } else if (
+    trend15 === momentum.direction &&
+    trend15 !== 'WAIT'
+  ) {
+    direction = trend15;
+    entryMode = 'STRICT';
+  }
+
+  // ==========================================
+  // EARLY ENTRY
+  // ==========================================
+
+  if (
+    direction === 'WAIT' &&
+    trend15 === 'BUY' &&
+    Number.isFinite(ema20) &&
+    entry > ema20 &&
+    Number.isFinite(rsi5) &&
+    rsi5 >= 52 &&
+    rsi5 <= 68 &&
+    !(
+      momentum.direction === 'SELL' &&
+      momentum.strength >= 4
+    )
+  ) {
+    direction = 'BUY';
+    entryMode = 'EARLY';
+  }
+
+  if (
+    direction === 'WAIT' &&
+    trend15 === 'SELL' &&
+    Number.isFinite(ema20) &&
+    entry < ema20 &&
+    Number.isFinite(rsi5) &&
+    rsi5 <= 48 &&
+    rsi5 >= 32 &&
+    !(
+      momentum.direction === 'BUY' &&
+      momentum.strength >= 3
+    )
+  ) {
+    direction = 'SELL';
+    entryMode = 'EARLY';
+  }
+
+  // ==========================================
+  // BREAKOUT ENTRY
+  // ==========================================
+
+  const previousCandles =
+    candles5.slice(-7, -1);
+
+  const previousHigh =
+    previousCandles.length
+      ? Math.max(
+          ...previousCandles
+            .map(c => Number(c.high))
+            .filter(Number.isFinite)
+        )
+      : null;
+
+  const previousLow =
+    previousCandles.length
+      ? Math.min(
+          ...previousCandles
+            .map(c => Number(c.low))
+            .filter(Number.isFinite)
+        )
+      : null;
+
+  let breakoutValid = false;
+
+  // BUY breakout
+  if (
+    trend15 === 'BUY' &&
+    Number.isFinite(previousHigh) &&
+    Number.isFinite(atr5) &&
+    entry > previousHigh &&
+    entry - previousHigh <= atr5 * 0.45 &&
+    ema9 > ema20 &&
+    momentum.direction === 'BUY' &&
+    momentum.strength >= 2 &&
+    Number.isFinite(rsi5) &&
+    rsi5 >= 55 &&
+    rsi5 <= 78
+  ) {
+    direction = 'BUY';
+    entryMode = 'BREAKOUT';
+    breakoutValid = true;
+  }
+
+  // SELL breakout
+  if (
+    trend15 === 'SELL' &&
+    Number.isFinite(previousLow) &&
+    Number.isFinite(atr5) &&
+    entry < previousLow &&
+    previousLow - entry <= atr5 * 0.45 &&
+    ema9 < ema20 &&
+    momentum.direction === 'SELL' &&
+    momentum.strength >= 2 &&
+    Number.isFinite(rsi5) &&
+    rsi5 <= 45 &&
+    rsi5 >= 22
+  ) {
+    direction = 'SELL';
+    entryMode = 'BREAKOUT';
+    breakoutValid = true;
+  }
+
+  if (direction === 'WAIT') {
+    return {
+      ready: false,
+      status: 'WAIT_DIRECTION',
+      pair,
+      trend15,
+      rsi5,
+      atr5,
+      ema9,
+      ema20,
+      momentum,
+      previousHigh,
+      previousLow
+    };
+  }
+
+  const aiDirection =
+    analysis15.signal?.action === 'BUY' ||
+    analysis15.signal?.action === 'SELL'
+      ? analysis15.signal.action
+      : null;
+
+  const aiConfidence =
+    Number.isFinite(Number(analysis15.signal?.confidence))
+      ? Number(analysis15.signal.confidence)
+      : 0;
+
+  // AI is confirmation, not an absolute gate.
+  if (aiDirection && aiDirection !== direction) {
+    return {
+      ready: false,
+      status: 'AI_DIRECTION_MISMATCH',
+      pair,
+      direction,
+      aiDirection,
+      aiConfidence
+    };
+  }
+
+  const scored = calculateScalpScore({
+    direction,
+    trend15,
+    ema9,
+    ema20,
+    rsi5,
+    momentum,
+    aiConfidence,
+    atr5,
+    entry
+  });
+
+  // Early entries get a small setup bonus,
+  // but remain weaker than full STRICT confirmation.
+  if (entryMode === 'EARLY') {
+    scored.score = Math.min(
+      100,
+      scored.score + 12
+    );
+
+    scored.reasons.push(
+      'Early scalp setup'
+    );
+  }
+
+  if (entryMode === 'BREAKOUT') {
+    scored.score = Math.min(
+      100,
+      scored.score + 15
+    );
+
+    scored.reasons.push(
+      'Confirmed 5M breakout'
+    );
+  }
+
+  // Dynamic late-entry protection.
+  let maxLateAtr = 0.85;
+
+  // A confirmed breakout is allowed to travel farther
+  // from EMA than a normal pullback entry.
+  if (entryMode === 'BREAKOUT') {
+    maxLateAtr = 1.75;
+  }
+
+  if (entryMode !== 'BREAKOUT') {
+    if (scored.score >= 85) {
+      maxLateAtr = 1.35;
+    } else if (scored.score >= 70) {
+      maxLateAtr = 1.10;
+    }
+  }
+
+  const distanceFromEma = Math.abs(entry - ema9);
+
+  if (
+    Number.isFinite(atr5) &&
+    Number.isFinite(ema9) &&
+    distanceFromEma > atr5 * maxLateAtr
+  ) {
+    return {
+      ready: false,
+      status: 'LATE_ENTRY',
+      pair,
+      direction,
+      score: scored.score,
+      aiConfidence,
+      atr5,
+      entry,
+      distanceFromEma,
+      maxLateAtr
+    };
+  }
+
+  let grade = 'WATCH';
+  let ready = false;
+
+  // ==========================================
+  // AI CONFIRMED GRADES
+  // ==========================================
+
+  if (
+    scored.score >= CONFIG.minScoreAPlus &&
+    aiConfidence >= CONFIG.minAiAPlus
+  ) {
+    grade = 'A+';
+    ready = true;
+
+  } else if (
+    entryMode === 'BREAKOUT' &&
+    scored.score >= 90 &&
+    aiConfidence >= 55 &&
+    (!aiDirection || aiDirection === direction)
+  ) {
+    grade = 'BREAKOUT-A';
+    ready = true;
+
+    scored.reasons.push(
+      'Elite breakout confirmation'
+    );
+
+  } else if (
+    scored.score >= CONFIG.minScoreA &&
+    aiConfidence >= CONFIG.minAiA
+  ) {
+    grade = 'A';
+    ready = true;
+  }
+
+  // ==========================================
+  // TECHNICAL FALLBACK
+  // AI unavailable, but technical setup is elite
+  // ==========================================
+
+  if (
+    !ready &&
+    !aiDirection &&
+    aiConfidence === 0 &&
+    scored.score >= 80 &&
+    direction === trend15
+  ) {
+    grade = 'TECH-A';
+    ready = true;
+
+    scored.reasons.push(
+      'AI unavailable - technical fallback'
+    );
+  }
+
+  if (!ready) {
+    return {
+      ready: false,
+      status: 'WATCH',
+      pair,
+      direction,
+      grade,
+      score: scored.score,
+      aiConfidence,
+      trend15,
+      rsi5,
+      atr5,
+      reasons: scored.reasons
+    };
+  }
+
+  const cooldown = cooldownAllows(direction, entry, atr5);
+
+  if (!cooldown.allowed) {
+    return {
+      ready: false,
+      status: cooldown.reason,
+      pair,
+      direction,
+      grade,
+      score: scored.score,
+      aiConfidence
+    };
+  }
+
+  const risk =
+    Math.max(
+      (Number(atr5) || 2) * 0.85,
+      1.8
+    );
+
+  const tp1Distance =
+    Math.max(
+      risk * 1.00,
+      1.8
+    );
+
+  const tp2Distance =
+    Math.max(
+      risk * 1.60,
+      2.8
+    );
+
+  const zoneHalf =
+    clamp(
+      (Number(atr5) || 2) * 0.18,
+      0.6,
+      2.0
+    );
+
+  const stopLoss =
+    direction === 'BUY'
+      ? entry - risk
+      : entry + risk;
+
+  const tp1 =
+    direction === 'BUY'
+      ? entry + tp1Distance
+      : entry - tp1Distance;
+
+  const tp2 =
+    direction === 'BUY'
+      ? entry + tp2Distance
+      : entry - tp2Distance;
+
+  return {
+    ready: true,
+    status: 'ENTRY_READY',
+    pair,
+    direction,
+    grade,
+    score: scored.score,
+    aiConfidence,
+    trend15,
+    rsi5,
+    atr5,
+    entryMode,
+    entry,
+    entryFrom: entry - zoneHalf,
+    entryTo: entry + zoneHalf,
+    stopLoss,
+    tp1,
+    tp2,
+    reasons: scored.reasons,
+    markSent: () => markSent(direction, entry, atr5)
+  };
+}
+
+async function buildGoldScalpResult() {
+  const scalp = await scanGoldScalp();
+
+  if (!scalp.ready) {
+    console.log(
+      `🟡 GOLD SCALPER WAIT: ${scalp.status}`,
+      {
+        direction: scalp.direction,
+        score: scalp.score,
+        ai: scalp.aiConfidence
+      }
+    );
+
+    return {
+      pair: 'XAUUSD',
+      signal: null,
+      indicators: {
+        atr: scalp.atr5 || null
+      },
+      scalpMeta: scalp
+    };
+  }
+
+  console.log(
+    `⚡ GOLD SCALP ${scalp.grade}: ${scalp.direction}`,
+    {
+      score: scalp.score,
+      ai: scalp.aiConfidence,
+      entry: scalp.entry,
+      tp1: scalp.tp1,
+      tp2: scalp.tp2,
+      sl: scalp.stopLoss
+    }
+  );
+
+  return {
+    pair: 'XAUUSD',
+    signal: {
+      action: scalp.direction,
+      entry: scalp.entry,
+      stopLoss: scalp.stopLoss,
+      targets: [
+        scalp.tp1,
+        scalp.tp2
+      ],
+      confidence: scalp.aiConfidence,
+      reason: `Gold Scalper ${scalp.grade} | Score ${scalp.score}/100`
+    },
+    indicators: {
+      atr: scalp.atr5,
+      rsi: scalp.rsi5
+    },
+    scalpMeta: scalp
+  };
+}
+
+module.exports = {
+  scanGoldScalp,
+  buildGoldScalpResult,
+  markGoldScalpSent: markSent
+};

@@ -2,7 +2,6 @@ const { scanMarkets } = require('./smartScanner');
 const { analyzePair } = require('./analysisService');
 const { runSignalLab } = require('./signalLab');
 const { getCandles } = require('./marketService');
-const { evaluateScalpEntry } = require('./scalpingEntryEngine');
 const {
   calculateTradeLevels,
   technicalScoreFromAnalysis,
@@ -129,46 +128,12 @@ async function getBestTrade() {
             continue;
         }
 
-        let scalpEntry = null;
-
-        try {
-            const preAnalysis =
-                await analyzePair(candidate.pair);
-
-            scalpEntry =
-                await evaluateScalpEntry(
-                    candidate.pair,
-                    candidate.action,
-                    preAnalysis?.indicators || {}
-                );
-
-            candidate.scalpEntry = scalpEntry;
-
-            console.log(
-                `⏱️ 5M ENTRY CHECK ${candidate.pair}: ${scalpEntry?.status || 'ERROR'}`
-            );
-
-        } catch (error) {
-
-            console.log(
-                `⚠️ 5M entry check failed ${candidate.pair}:`,
-                error.message
-            );
-
-            scalpEntry = {
-                status: 'ERROR',
-                reason: error.message
-            };
-
-            candidate.scalpEntry = scalpEntry;
-        }
-
         if (
-            !scalpEntry ||
-            scalpEntry.status !== 'ENTRY_READY'
+            !candidate.scalpEntry ||
+            candidate.scalpEntry.status !== 'ENTRY_READY'
         ) {
             console.log(
-                `🟡 5M entry not ready: ${candidate.pair} / ${scalpEntry?.status || 'ERROR'}`
+                `❌ 5M entry confirmation missing: ${candidate.pair} / ${candidate.scalpEntry?.status || 'NONE'}`
             );
 
             lastRejectedCandidates.push({
@@ -177,7 +142,7 @@ async function getBestTrade() {
                 smartScore: Number(candidate.score || 0),
                 aiConfidence: Number(candidate.confidence || 0),
                 reason: 'SCALP_NOT_READY',
-                scalpStatus: scalpEntry?.status || 'ERROR'
+                scalpStatus: candidate.scalpEntry?.status || 'NONE'
             });
 
             continue;

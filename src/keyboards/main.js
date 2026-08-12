@@ -1,14 +1,20 @@
 const { Markup } = require('telegraf');
 const { tByLang } = require('../utils/i18n');
 
-const mainKeyboard = (language = 'ar') => {
+const mainKeyboard = (language = 'ar', isAdmin = false) => {
   const { buttons } = tByLang(language);
 
-  return Markup.keyboard([
+  const rows = [
     [buttons.tradeNow, buttons.bestOpportunity],
     [buttons.marketCenter, buttons.alertsCenter],
     [buttons.accountCenter, buttons.more]
-  ]).resize();
+  ];
+
+  if (isAdmin) {
+    rows.push(['🎛️ لوحة الأدمن']);
+  }
+
+  return Markup.keyboard(rows).resize();
 };
 
 const marketKeyboard = (language = 'ar') => {

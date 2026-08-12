@@ -10,6 +10,7 @@ const {
   settingsKeyboard,
   vipKeyboard
 } = require('../keyboards/main');
+const { adminV21Keyboard } = require('../keyboards/adminV21');
 const { plans, createVipRequest } = require('../services/vipService');
 const { analyzePair } = require('../services/analysisService');
 const { scanMarkets } = require('../services/smartScanner');
@@ -59,7 +60,16 @@ function isEnglish(ctx) {
 }
 
 function keyboard(ctx) {
-  return mainKeyboard(languageOf(ctx));
+  const adminIds = (config.adminIds || []).map(String);
+
+  const isAdmin = adminIds.includes(
+    String(ctx.from?.id)
+  );
+
+  return mainKeyboard(
+    languageOf(ctx),
+    isAdmin
+  );
 }
 
 function assetKeyboard(ctx) {
@@ -960,6 +970,23 @@ Choose how you would like to continue:`
       Markup.inlineKeyboard([
         [Markup.button.url(isEnglish(ctx) ? '🚀 Join Group' : '🚀 دخول الجروب', link)]
       ])
+    );
+  });
+
+  bot.hears('🎛️ لوحة الأدمن', async (ctx) => {
+    const adminIds = (config.adminIds || []).map(String);
+
+    if (
+      !adminIds.includes(
+        String(ctx.from?.id)
+      )
+    ) {
+      return;
+    }
+
+    return ctx.reply(
+      '🎛️ FOREX AI — Admin Control Center V2.1',
+      adminV21Keyboard()
     );
   });
 

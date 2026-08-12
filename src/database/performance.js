@@ -45,8 +45,24 @@ function realizedR(trade, exitPrice, outcome) {
   const risk = riskDistance(trade);
   if (!risk) return null;
 
-  if (outcome === 'SL' || outcome === 'TP1_THEN_SL') {
+  if (outcome === 'SL') {
     return -1;
+  }
+
+  if (outcome === 'TP1_THEN_SL') {
+    const entry = Number(trade.entry);
+    const tp1 = Number(trade.target1);
+
+    if (!Number.isFinite(entry) || !Number.isFinite(tp1)) {
+      return 0;
+    }
+
+    const tp1R = Math.abs(tp1 - entry) / risk;
+
+    // 50% secured at TP1, 50% later exited at SL.
+    const finalR = (tp1R * 0.5) - 0.5;
+
+    return Number(finalR.toFixed(3));
   }
 
   const entry = Number(trade.entry);
@@ -258,7 +274,8 @@ function getStats(days) {
         closed: 0,
         tp1: 0,
         tp2: 0,
-        sl: 0
+        sl: 0,
+        tp1ThenSl: 0
       };
     }
 

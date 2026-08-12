@@ -38,7 +38,7 @@ The tracker starts collecting verified results from this version onward.`
         return `${pair}: ${s.total} ${en ? 'tracked' : 'متابعة'}`;
       }
 
-      return `${pair}: ${s.closed} ${en ? 'closed' : 'مغلقة'} | TP1 ${s.tp1} | TP2 ${s.tp2} | SL ${s.sl}`;
+      return `${pair}: ${s.closed} ${en ? 'closed' : 'مغلقة'} | TP1 ${s.tp1} | TP2 ${s.tp2} | SL ${s.sl} | TP1→SL ${s.tp1ThenSl || 0}`;
     })
     .join('\n');
 
@@ -52,7 +52,8 @@ The tracker starts collecting verified results from this version onward.`
 
 🎯 TP1 hit: ${stats.tp1} (${pct(stats.tp1Rate)})
 🏆 TP2 hit: ${stats.tp2} (${pct(stats.tp2Rate)})
-🛑 SL hit: ${stats.sl} (${pct(stats.slRate)})
+🛑 Pure SL: ${stats.sl} (${pct(stats.slRate)})
+🟡 TP1 then SL: ${stats.tp1ThenSl || 0}
 
 ⚖️ Average final R: ${rText(stats.avgR)}
 📈 Total final R: ${rText(stats.totalR)}
@@ -60,7 +61,7 @@ The tracker starts collecting verified results from this version onward.`
 By asset:
 ${pairRows || '—'}
 
-⚠️ TP1 and SL can both be counted if a trade hit TP1 first and later returned to SL.`;
+ℹ️ TP1→SL is tracked separately and is not counted as a full-loss SL.`;
   }
 
   return `📊 أداء البوت — آخر ${stats.days} يوم
@@ -72,7 +73,8 @@ ${pairRows || '—'}
 
 🎯 حققت TP1: ${stats.tp1} (${pct(stats.tp1Rate)})
 🏆 حققت TP2: ${stats.tp2} (${pct(stats.tp2Rate)})
-🛑 ضربت SL: ${stats.sl} (${pct(stats.slRate)})
+🛑 SL قبل TP1: ${stats.sl} (${pct(stats.slRate)})
+🟡 TP1 ثم SL: ${stats.tp1ThenSl || 0}
 
 ⚖️ متوسط R النهائي: ${rText(stats.avgR)}
 📈 إجمالي R النهائي: ${rText(stats.totalR)}
@@ -80,7 +82,7 @@ ${pairRows || '—'}
 حسب الأصل:
 ${pairRows || '—'}
 
-⚠️ يمكن أن تُحسب الصفقة ضمن TP1 وSL معًا إذا حققت الهدف الأول ثم عادت إلى وقف الخسارة.`;
+ℹ️ حالة TP1 ثم SL تُسجل منفصلة ولا تُحسب كخسارة SL كاملة.`;
 }
 
 function registerPerformance(bot) {

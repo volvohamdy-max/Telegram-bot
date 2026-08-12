@@ -15,6 +15,9 @@ function adminV21Keyboard() {
       Markup.button.callback('📰 الأخبار', 'adminv21_news')
     ],
     [
+      Markup.button.callback('📣 إرسال إشارة ذهب', 'adminv21_manual_signal')
+    ],
+    [
       Markup.button.callback('🎛️ التحكم', 'adminv21_controls'),
       Markup.button.callback('🩺 System Health', 'adminv21_health')
     ],
@@ -97,8 +100,80 @@ function maintenanceConfirmKeyboard(active) {
   ]);
 }
 
+
+
+
+
+function manualSignalTypeKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        '⚡ Scalping',
+        'adminv21_manual_type_scalp'
+      ),
+      Markup.button.callback(
+        '📈 Intraday',
+        'adminv21_manual_type_intraday'
+      )
+    ],
+    [
+      Markup.button.callback(
+        '⬅️ رجوع',
+        'adminv21_dashboard'
+      )
+    ]
+  ]);
+}
+
+function manualSignalDirectionKeyboard(type) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        '📈 BUY',
+        `adminv21_manual_${type}_buy`
+      ),
+      Markup.button.callback(
+        '📉 SELL',
+        `adminv21_manual_${type}_sell`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '⬅️ تغيير النوع',
+        'adminv21_manual_signal'
+      )
+    ]
+  ]);
+}
+
+function manualSignalConfirmKeyboard(type, direction) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        '✅ إرسال الإشارة',
+        `adminv21_manual_confirm_${type}_${direction}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '🔄 تحديث السعر',
+        `adminv21_manual_${type}_${direction.toLowerCase()}`
+      )
+    ],
+    [
+      Markup.button.callback(
+        '❌ إلغاء',
+        'adminv21_dashboard'
+      )
+    ]
+  ]);
+}
+
 module.exports = {
+  manualSignalTypeKeyboard,
   adminV21Keyboard,
   controlsV21Keyboard,
-  maintenanceConfirmKeyboard
+  maintenanceConfirmKeyboard,
+  manualSignalDirectionKeyboard,
+  manualSignalConfirmKeyboard
 };

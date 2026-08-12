@@ -260,7 +260,10 @@ ${trade.stop_loss}
                     recordTp1(trade, price);
                 } else if (resultType === 'TP2') {
                     recordTp2(trade, price);
-                } else if (resultType === 'SL') {
+                } else if (
+                    resultType === 'SL' ||
+                    resultType === 'TP1_THEN_SL'
+                ) {
                     recordSl(trade, price);
                 }
 

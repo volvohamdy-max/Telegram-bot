@@ -231,9 +231,17 @@ let cache = {
 
 const CACHE_MS = 10 * 60 * 1000;
 
-async function getMultiSourceCalendar() {
-  if (cache.data.length && Date.now() - cache.time < CACHE_MS) {
+async function getMultiSourceCalendar(forceRefresh = false) {
+  if (
+    !forceRefresh &&
+    cache.data.length &&
+    Date.now() - cache.time < CACHE_MS
+  ) {
     return cache;
+  }
+
+  if (forceRefresh) {
+    console.log('🔄 Force refreshing economic calendar...');
   }
 
   const now = new Date();
