@@ -19,9 +19,6 @@ const { evaluateScalpEntry } = require('./scalpingEntryEngine');
 const {
   saveTradeFeatures
 } = require('../database/adaptiveIntelligence');
-const {
-  publishHiddenSignal
-} = require('./hiddenSignalService');
 const config = require('../config');
 const {
   getBoolSetting,
@@ -530,8 +527,6 @@ for (const user of users) {
       // FREE PUBLIC SIGNAL — مرة واحدة كل 24 ساعة
       // ==================================================
 
-      let freePublicSent = false;
-
       const freeEligible =
         pair === 'XAUUSD' &&
         result.scalpMeta?.ready === true &&
@@ -564,8 +559,6 @@ ${message}
 
           markFreeSignalSent();
 
-          freePublicSent = true;
-
           console.log(
             `🆓 FREE SIGNAL SENT | Trade ${tradeId}`
           );
@@ -574,46 +567,6 @@ ${message}
           console.log(
             'Free signal send error:',
             e.message
-          );
-        }
-      }
-
-
-      // ==================================================
-      // HIDDEN SIGNAL FOR PUBLIC
-      // VIP signal that was NOT today's free public signal.
-      // ==================================================
-
-      if (
-        !freePublicSent &&
-        tradeId > 0
-      ) {
-        try {
-          await publishHiddenSignal(
-            bot,
-            {
-              tradeId,
-              pair,
-              action: result.signal.action,
-
-              entry: levels.entry,
-              stopLoss: levels.sl,
-              target1: levels.tp1,
-              target2: levels.tp2,
-
-              aiScore:
-                Number(
-                  result.scalpMeta?.score ??
-                  result.signal?.confidence ??
-                  0
-                )
-            }
-          );
-
-        } catch (error) {
-          console.log(
-            'Hidden signal publish failed:',
-            error.message
           );
         }
       }

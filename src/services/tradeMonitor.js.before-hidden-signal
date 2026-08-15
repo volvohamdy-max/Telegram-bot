@@ -10,9 +10,6 @@ const {
 const { allUsers } = require('../database/users');
 const { getCachedPrice, setPrice } = require('./priceCache');
 const config = require('../config');
-const {
-  handleHiddenResult
-} = require('./hiddenSignalService');
 
 async function monitorTrades(bot) {
     const trades = getOpenTrades();
@@ -411,26 +408,6 @@ ${trade.stop_loss}
                     resultType === 'TP1_THEN_SL'
                 ) {
                     recordSl(trade, price);
-                }
-
-
-                // ==========================================
-                // HIDDEN SIGNAL RESULT
-                // TP1/TP2 may notify public.
-                // SL is recorded silently.
-                // ==========================================
-
-                try {
-                    await handleHiddenResult(
-                        bot,
-                        trade.id,
-                        resultType
-                    );
-                } catch (error) {
-                    console.log(
-                        `Hidden result error ${trade.id}:`,
-                        error.message
-                    );
                 }
 
                 updateTradeStatus(

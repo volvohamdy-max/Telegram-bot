@@ -8,6 +8,7 @@ const { scanMarket } = require('./autoSignals');
 const { monitorTrades } = require('./tradeMonitor');
 const { monitorCopilotTrades } = require('./tradeCopilot');
 const { monitorOpportunityRadar } = require('./opportunityRadar');
+const { runOpportunityTeaser } = require('./opportunityTeaser');
 const { collectShadowOpportunities } = require('./shadowOpportunityCollector');
 const { monitorShadowTrades } = require('./shadowTradeEngine');
 const { runPersonalizedAlerts } = require('./personalizedAlerts');
@@ -22,6 +23,7 @@ let newsRunning = false;
 let monitorRunning = false;
 let copilotMonitorRunning = false;
 let radarMonitorRunning = false;
+let opportunityTeaserRunning = false;
 let shadowSystemRunning = false;
 
 function startScheduler(bot) {
@@ -309,6 +311,33 @@ cron.schedule('*/2 * * * *', async () => {
     shadowSystemRunning = false;
   }
 
+});
+
+// =========================
+// PUBLIC OPPORTUNITY TEASER
+// every 2 minutes
+// =========================
+
+cron.schedule('*/2 * * * *', async () => {
+
+  if (opportunityTeaserRunning) {
+    return;
+  }
+
+  opportunityTeaserRunning = true;
+
+  try {
+    await runOpportunityTeaser(bot);
+
+  } catch (error) {
+    console.log(
+      '❌ Public Opportunity Teaser:',
+      error.message
+    );
+
+  } finally {
+    opportunityTeaserRunning = false;
+  }
 });
 
 // OPPORTUNITY RADAR MONITOR

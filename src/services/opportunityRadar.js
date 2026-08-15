@@ -178,48 +178,127 @@ async function buildOpportunityRadar() {
 }
 
 function getState(row) {
-  if (row.ready) return 'READY';
-  if (row.passed >= 5) return 'ALMOST_READY';
-  if (row.passed >= 4) return 'FORMING';
+  if (!row) {
+    return 'WEAK';
+  }
+
+  if (
+    row.ready ||
+    row.passed >= row.total
+  ) {
+    return 'CONFIRMED';
+  }
+
+  if (row.passed === 5) {
+    return 'ALMOST_READY';
+  }
+
+  if (row.passed === 4) {
+    return 'FORMING';
+  }
+
   return 'WEAK';
 }
 
 function radarText(rows) {
-  if (!rows.length)
-    return '📡 رادار الفرص\n\nلا توجد فرص نشطة حاليًا.';
+  if (!rows.length) {
+    return `📡 رادار الفرص
 
-  const medals = ['🥇','🥈','🥉','4️⃣','5️⃣'];
+لا توجد فرص نشطة حاليًا.`;
+  }
 
-  const body = rows.slice(0, 5).map((r, i) => {
-    const direction =
-      r.direction === 'BUY' ? '📈 BUY' :
-      r.direction === 'SELL' ? '📉 SELL' :
-      '⏳ WAIT';
+  const medals = [
+    '🥇',
+    '🥈',
+    '🥉',
+    '4️⃣',
+    '5️⃣'
+  ];
 
-    const bars =
-      '█'.repeat(r.passed) +
-      '░'.repeat(r.total - r.passed);
+  const body =
+    rows.slice(0, 5)
+      .map((r, i) => {
 
-    let state = '⏳ تحت المراقبة';
+        const state =
+          getState(r);
 
-    if (r.ready)
-      state = '🔥 الفرصة مكتملة';
-    else if (r.passed === 5)
-      state = '👀 باقي شرط واحد';
-    else if (r.passed >= 4)
-      state = '🟡 الفرصة تتكوّن';
+        const bars =
+          '█'.repeat(r.passed) +
+          '░'.repeat(
+            Math.max(
+              0,
+              r.total - r.passed
+            )
+          );
 
-    const missing = r.missing[0]
-      ? `الناقص: ${r.missing[0]}`
-      : '✅ كل الشروط مؤكدة';
+        let directionText =
+          '⏳ لم يتم تأكيد اتجاه دخول';
 
-    return `${medals[i] || '•'} ${r.pair}
-${direction}
+        /*
+         * قبل 6/6:
+         * نعرض الميل فقط، وليس BUY/SELL كتوصية.
+         */
+        if (
+          state === 'FORMING' ||
+          state === 'ALMOST_READY'
+        ) {
+          directionText =
+            r.direction === 'BUY'
+              ? '🧭 الميل الحالي: صعودي'
+              : r.direction === 'SELL'
+                ? '🧭 الميل الحالي: هبوطي'
+                : '🧭 الميل الحالي: غير محسوم';
+        }
+
+        /*
+         * BUY / SELL يظهر فقط عند التأكيد.
+         */
+        if (state === 'CONFIRMED') {
+          directionText =
+            r.direction === 'BUY'
+              ? '📈 إشارة مؤكدة: BUY'
+              : r.direction === 'SELL'
+                ? '📉 إشارة مؤكدة: SELL'
+                : '✅ الإشارة مكتملة';
+        }
+
+        let stateText =
+          '⏳ تحت المراقبة';
+
+        if (state === 'FORMING') {
+          stateText =
+            '🟡 الفرصة تتكوّن';
+        }
+
+        if (state === 'ALMOST_READY') {
+          stateText =
+            '👀 باقي شرط واحد فقط';
+        }
+
+        if (state === 'CONFIRMED') {
+          stateText =
+            '🔥 الفرصة اكتملت';
+        }
+
+        const missing =
+          r.missing?.length
+            ? `الناقص: ${r.missing[0]}`
+            : '✅ كل الشروط مؤكدة';
+
+        return `${medals[i] || '•'} ${r.pair}
+
+${directionText}
+
 ${bars} ${r.passed}/${r.total}
+
 ⭐ Score: ${r.score}/100
-${state}
+
+${stateText}
+
 ${missing}`;
-  }).join('\n\n');
+      })
+      .join('\n\n');
+
 
   return `📡 FOREX AI — رادار الفرص
 ━━━━━━━━━━━━━━━━━━
@@ -227,80 +306,274 @@ ${missing}`;
 ${body}
 
 ━━━━━━━━━━━━━━━━━━
-الرادار يراقب الفرص أثناء تكوّنها قبل اكتمال الإشارة.
+
+ℹ️ BUY / SELL لا يظهر كإشارة دخول إلا بعد اكتمال جميع شروط التأكيد.
 
 ⚠️ التحليل فني ومعلوماتي ولا يضمن نتائج التداول.`;
 }
 
 async function monitorOpportunityRadar(bot) {
-  const watches = getWatches();
-  if (!watches.length) return;
+  const watches =
+    getWatches();
 
-  const rows = await buildOpportunityRadar();
-  const map = new Map(rows.map(r => [r.pair, r]));
+  if (!watches.length) {
+    return;
+  }
+
+  const rows =
+    await buildOpportunityRadar();
+
+  const map =
+    new Map(
+      rows.map(
+        row => [
+          row.pair,
+          row
+        ]
+      )
+    );
+
 
   for (const watch of watches) {
-    const pair = String(watch.pair).toUpperCase();
+    try {
+      const pair =
+        String(
+          watch.pair
+        ).toUpperCase();
 
-    if (!isPairMarketOpen(pair)) continue;
+      if (!isPairMarketOpen(pair)) {
+        continue;
+      }
 
-    const row = map.get(pair);
-    if (!row) continue;
+      const row =
+        map.get(pair);
 
-    const state = getState(row);
-    const previous = String(watch.last_state || 'WATCHING');
+      if (!row) {
+        continue;
+      }
 
-    if (
-      state !== previous &&
-      (state === 'ALMOST_READY' || state === 'READY')
-    ) {
-      const text = state === 'READY'
-        ? `🚨 فرصة الرادار اكتملت
+      const state =
+        getState(row);
+
+      const previous =
+        String(
+          watch.last_state ||
+          'WATCHING'
+        );
+
+      const previousDirection =
+        String(
+          watch.last_direction ||
+          ''
+        ).toUpperCase();
+
+      const currentDirection =
+        String(
+          row.direction ||
+          ''
+        ).toUpperCase();
+
+
+      /*
+       * CANCELLED:
+       *
+       * كانت فرصة حقيقية تتكوّن،
+       * ثم فقدت شروطها أو انعكس اتجاهها.
+       */
+      const wasActiveSetup =
+        previous === 'FORMING' ||
+        previous === 'ALMOST_READY';
+
+      const lostSetup =
+        row.passed <= 3;
+
+      const directionChanged =
+        previousDirection &&
+        currentDirection &&
+        previousDirection !== currentDirection;
+
+      let effectiveState =
+        state;
+
+
+      if (
+        wasActiveSetup &&
+        (
+          lostSetup ||
+          directionChanged
+        )
+      ) {
+        effectiveState =
+          'CANCELLED';
+      }
+
+
+      let message = null;
+
+
+      // ======================================
+      // FORMING
+      // ======================================
+
+      if (
+        effectiveState === 'FORMING' &&
+        previous !== 'FORMING'
+      ) {
+        message =
+`🟡 فرصة بدأت تتكوّن
 ━━━━━━━━━━━━━━━━━━
+
 🥇 ${pair}
-${row.direction === 'BUY' ? '📈 BUY' : '📉 SELL'}
 
-✅ الشروط: ${row.passed}/${row.total}
-⭐ Score: ${row.score}/100
+${
+  currentDirection === 'BUY'
+    ? '🧭 الميل الحالي: صعودي'
+    : currentDirection === 'SELL'
+      ? '🧭 الميل الحالي: هبوطي'
+      : '🧭 الميل الحالي: غير محسوم'
+}
 
-🔥 جميع الشروط الفنية اكتملت.
+📡 الشروط:
+${row.passed}/${row.total}
 
-افتح البوت لمراجعة التحليل قبل اتخاذ القرار.
+⭐ Score:
+${row.score}/100
 
-⚠️ التحليل آلي ولا يضمن نتائج التداول.`
+⚠️ لا توجد إشارة دخول مؤكدة حتى الآن.
 
-        : `👀 فرصة تقترب من الاكتمال
+الرادار مستمر في المراقبة.`;
+      }
+
+
+      // ======================================
+      // ALMOST READY
+      // ======================================
+
+      if (
+        effectiveState === 'ALMOST_READY' &&
+        previous !== 'ALMOST_READY'
+      ) {
+        message =
+`👀 فرصة قوية تقترب من الاكتمال
 ━━━━━━━━━━━━━━━━━━
+
 🥇 ${pair}
-${row.direction === 'BUY' ? '📈 BUY' : '📉 SELL'}
 
-✅ الشروط: ${row.passed}/${row.total}
-⭐ Score: ${row.score}/100
+${
+  currentDirection === 'BUY'
+    ? '🧭 الميل الحالي: صعودي'
+    : currentDirection === 'SELL'
+      ? '🧭 الميل الحالي: هبوطي'
+      : '🧭 الميل الحالي: غير محسوم'
+}
 
-⏳ باقي شرط واحد:
-${row.missing[0] || '—'}
+█████░ 5/6
+
+⭐ Score:
+${row.score}/100
+
+⏳ الشرط المتبقي:
+${row.missing?.[0] || '—'}
+
+🔒 اتجاه الدخول النهائي لم يتم تأكيده بعد.
 
 📡 الرادار مستمر في المتابعة.`;
-
-      try {
-        await bot.telegram.sendMessage(
-          watch.telegram_id,
-          text
-        );
-      } catch (e) {
-        console.log(
-          'Radar alert send failed:',
-          e.message
-        );
       }
-    }
 
-    updateWatchState(
-      watch.telegram_id,
-      pair,
-      state,
-      row.score
-    );
+
+      // ======================================
+      // CONFIRMED
+      // ======================================
+
+      if (
+        effectiveState === 'CONFIRMED' &&
+        previous !== 'CONFIRMED'
+      ) {
+        message =
+`🔥 الفرصة اكتملت الآن
+━━━━━━━━━━━━━━━━━━
+
+🥇 ${pair}
+
+${
+  currentDirection === 'BUY'
+    ? '📈 BUY'
+    : currentDirection === 'SELL'
+      ? '📉 SELL'
+      : '✅ CONFIRMED'
+}
+
+██████ 6/6
+
+⭐ Score:
+${row.score}/100
+
+✅ جميع شروط التأكيد الفني اكتملت.
+
+افتح البوت لمراجعة تفاصيل التحليل قبل اتخاذ القرار.
+
+⚠️ التحليل آلي ومعلوماتي ولا يضمن نتائج التداول.`;
+      }
+
+
+      // ======================================
+      // CANCELLED
+      // ======================================
+
+      if (
+        effectiveState === 'CANCELLED' &&
+        previous !== 'CANCELLED'
+      ) {
+        message =
+`⚠️ الفرصة السابقة لم تكتمل
+━━━━━━━━━━━━━━━━━━
+
+🥇 ${pair}
+
+📡 الرادار ألغى الفرصة قبل إصدار إشارة دخول مؤكدة.
+
+${
+  directionChanged
+    ? '🔄 السبب: تغيّر اتجاه السوق.'
+    : '📉 السبب: فقدت الفرصة عددًا من شروط التأكيد.'
+}
+
+✅ No Trade = قرار.
+
+الرادار مستمر في البحث عن فرصة جديدة.`;
+      }
+
+
+      if (message) {
+        try {
+          await bot.telegram.sendMessage(
+            watch.telegram_id,
+            message
+          );
+        } catch (error) {
+          console.log(
+            `Radar alert send failed ${watch.telegram_id}:`,
+            error.message
+          );
+        }
+      }
+
+
+      updateWatchState(
+        watch.telegram_id,
+        pair,
+        effectiveState,
+        row.score,
+        currentDirection,
+        row.completion
+      );
+
+    } catch (error) {
+      console.log(
+        'Opportunity Radar state error:',
+        error.message
+      );
+    }
   }
 }
 

@@ -15,6 +15,36 @@ function ensureTable() {
     CREATE INDEX IF NOT EXISTS idx_opportunity_radar_pair
       ON opportunity_radar_watches (pair);
   `);
+
+  // Safe migrations for existing installations
+  const columns = db.prepare(
+    "PRAGMA table_info(opportunity_radar_watches)"
+  ).all();
+
+  const names = new Set(
+    columns.map(x => x.name)
+  );
+
+  if (!names.has('last_direction')) {
+    db.exec(`
+      ALTER TABLE opportunity_radar_watches
+      ADD COLUMN last_direction TEXT
+    `);
+  }
+
+  if (!names.has('last_completion')) {
+    db.exec(`
+      ALTER TABLE opportunity_radar_watches
+      ADD COLUMN last_completion INTEGER DEFAULT 0
+    `);
+  }
+
+  if (!names.has('confirmed_at')) {
+    db.exec(`
+      ALTER TABLE opportunity_radar_watches
+      ADD COLUMN confirmed_at TEXT
+    `);
+  }
 }
 
 function addWatch(telegramId, pair) {
@@ -72,21 +102,56 @@ function updateWatchState(
   telegramId,
   pair,
   state,
-  score
+  score,
+  direction = null,
+  completion = 0
 ) {
   ensureTable();
+
+  const confirmedAt =
+    state === 'CONFIRMED'
+      ? new Date().toISOString()
+      : null;
 
   return db.prepare(`
     UPDATE opportunity_radar_watches
     SET
       last_state = ?,
       last_score = ?,
+      last_direction = ?,
+      last_completion = ?,
+
+      confirmed_at =
+        CASE
+          WHEN ? = 'CONFIRMED'
+          THEN COALESCE(confirmed_at, ?)
+
+          WHEN ? IN ('FORMING', 'ALMOST_READY', 'CANCELLED', 'WEAK')
+          THEN NULL
+
+          ELSE confirmed_at
+        END,
+
       updated_at = CURRENT_TIMESTAMP
+
     WHERE telegram_id = ?
       AND pair = ?
   `).run(
     String(state),
+
     Number(score || 0),
+
+    direction
+      ? String(direction).toUpperCase()
+      : null,
+
+    Number(completion || 0),
+
+    String(state),
+    confirmedAt,
+
+    String(state),
+
     String(telegramId),
     String(pair).toUpperCase()
   );
