@@ -7,6 +7,9 @@ const { expireVipUsers } = require('../database/users');
 const { scanMarket } = require('./autoSignals');
 const { monitorTrades } = require('./tradeMonitor');
 const { monitorCopilotTrades } = require('./tradeCopilot');
+const { monitorOpportunityRadar } = require('./opportunityRadar');
+const { collectShadowOpportunities } = require('./shadowOpportunityCollector');
+const { monitorShadowTrades } = require('./shadowTradeEngine');
 const { runPersonalizedAlerts } = require('./personalizedAlerts');
 
 const {
@@ -18,6 +21,8 @@ let scanRunning = false;
 let newsRunning = false;
 let monitorRunning = false;
 let copilotMonitorRunning = false;
+let radarMonitorRunning = false;
+let shadowSystemRunning = false;
 
 function startScheduler(bot) {
 
@@ -262,6 +267,78 @@ cron.schedule('*/5 * * * *', async () => {
 
 
   // =========================
+// =========================
+// =========================
+// SHADOW DECISION ENGINE
+// every 2 minutes
+// =========================
+
+cron.schedule('*/2 * * * *', async () => {
+
+  if (shadowSystemRunning) {
+    console.log(
+      '👻 Previous Shadow Engine cycle still running - skipped'
+    );
+    return;
+  }
+
+  shadowSystemRunning = true;
+
+  try {
+
+    const created =
+      await collectShadowOpportunities();
+
+    await monitorShadowTrades();
+
+    if (created > 0) {
+      console.log(
+        `👻 Shadow Engine: ${created} new opportunity(s)`
+      );
+    }
+
+  } catch (error) {
+
+    console.log(
+      '❌ Shadow Decision Engine:',
+      error.message
+    );
+
+  } finally {
+
+    shadowSystemRunning = false;
+  }
+
+});
+
+// OPPORTUNITY RADAR MONITOR
+// every 2 minutes
+// =========================
+
+cron.schedule('*/2 * * * *', async () => {
+  if (radarMonitorRunning) {
+    console.log(
+      '⚠️ Previous Opportunity Radar monitor still running - skipped'
+    );
+    return;
+  }
+
+  radarMonitorRunning = true;
+
+  try {
+    await monitorOpportunityRadar(bot);
+
+  } catch (error) {
+    console.log(
+      '❌ Opportunity Radar monitor:',
+      error.message
+    );
+
+  } finally {
+    radarMonitorRunning = false;
+  }
+});
+
   // AI Trade Copilot - every 30 seconds
   // =========================
 

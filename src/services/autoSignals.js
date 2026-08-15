@@ -16,6 +16,9 @@ const { getCandles } = require('./marketService');
 const { calculateTradeLevels } = require('./tradeEngine');
 const { saveSignal } = require('./signalCache');
 const { evaluateScalpEntry } = require('./scalpingEntryEngine');
+const {
+  saveTradeFeatures
+} = require('../database/adaptiveIntelligence');
 const config = require('../config');
 const {
   getBoolSetting,
@@ -385,6 +388,28 @@ if (
 
       const tradeId =
         Number(tradeInsert?.lastInsertRowid || 0);
+
+      if (tradeId > 0) {
+        try {
+          saveTradeFeatures({
+            tradeId,
+            pair,
+            action: result.signal.action,
+            indicators: result.indicators || {},
+            scalpMeta: result.scalpMeta || {}
+          });
+
+          console.log(
+            `🧠 Adaptive snapshot saved | Trade ${tradeId}`
+          );
+
+        } catch (error) {
+          console.log(
+            '⚠️ Adaptive snapshot save failed:',
+            error.message
+          );
+        }
+      }
 
       const livePrice = Number(levels.entry);
 

@@ -8,6 +8,9 @@ const registerPerformance = require('./commands/performance');
 const registerSlashCommands = require('./commands/slashCommands');
 const registerMarketMap = require('./commands/marketMap');
 const registerTrendHunter = require('./commands/trendHunter');
+const registerOpportunityRadar = require('./commands/opportunityRadar');
+const registerAdaptiveIntelligence = require('./commands/adaptiveIntelligence');
+const registerShadowAudit = require('./commands/shadowAudit');
 const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
@@ -36,6 +39,8 @@ async function main() {
     { command: 'menu', description: '📋 Main menu / القائمة الرئيسية' },
     { command: 'trade', description: '⚡ Best trade / أفضل صفقة' },
     { command: 'scanner', description: '🔎 Smart Scanner / الماسح الذكي' },
+    { command: 'radar', description: '📡 Opportunity Radar / رادار الفرص' },
+    { command: 'adaptive', description: '🧠 Adaptive Intelligence / الذكاء المتكيف' },
     { command: 'trend', description: '📡 Trend Hunter / صياد الترند' },
     { command: 'map', description: '🧭 Market Map / خريطة السوق' },
     { command: 'analysis', description: '📈 Analyze asset / تحليل أصل' },
@@ -71,6 +76,9 @@ async function main() {
   registerSettings(bot);
   registerAlerts(bot);
   registerTrendHunter(bot);
+  registerOpportunityRadar(bot);
+  registerAdaptiveIntelligence(bot);
+  registerShadowAudit(bot);
   registerMarketMap(bot);
   registerSlashCommands(bot);
   registerUserCommands(bot);

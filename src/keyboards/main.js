@@ -36,6 +36,16 @@ const marketKeyboard = (language = 'ar') => {
   return Markup.keyboard([
     [buttons.scanner, buttons.marketMap],
     [buttons.trendHunter, buttons.analysis],
+    [
+      language === 'en'
+        ? '📡 Opportunity Radar'
+        : '📡 رادار الفرص'
+    ],
+    [
+      language === 'en'
+        ? '🧠 Adaptive Intelligence'
+        : '🧠 الذكاء المتكيف'
+    ],
     [buttons.signalLab],
     [buttons.back]
   ]).resize();
