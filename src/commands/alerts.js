@@ -138,7 +138,34 @@ function confidenceKeyboard(ctx, pref) {
 
 async function editHome(ctx) {
   const pref = getPreference(ctx.from.id);
-  return ctx.editMessageText(statusText(ctx, pref), mainKeyboard(ctx, pref));
+
+  try {
+    return await ctx.editMessageText(
+      statusText(ctx, pref),
+      mainKeyboard(ctx, pref)
+    );
+  } catch (error) {
+    const message =
+      String(
+        error?.response?.description ||
+        error?.message ||
+        ''
+      );
+
+    if (
+      message.includes(
+        'message is not modified'
+      )
+    ) {
+      console.log(
+        'ℹ️ Alerts message unchanged — edit skipped'
+      );
+
+      return;
+    }
+
+    throw error;
+  }
 }
 
 function registerAlerts(bot) {

@@ -32,6 +32,7 @@ function controlsV21Keyboard(settings = {}) {
   const auto = settings.auto_signals_enabled === '1';
   const breaking = settings.breaking_news_enabled === '1';
   const maintenance = settings.maintenance_mode === '1';
+  const freeLimit = settings.free_daily_limit_enabled === '1';
 
   return Markup.inlineKeyboard([
     [
@@ -66,6 +67,13 @@ function controlsV21Keyboard(settings = {}) {
         'adminv21_maintenance'
       )
     ],
+    [
+      Markup.button.callback(
+        `${freeLimit ? '🟢' : '⚪'} Free Daily Limit`,
+        'adminv21_toggle_free_limit'
+      )
+    ],
+
     [
       Markup.button.callback('⬅️ Dashboard', 'adminv21_dashboard')
     ]

@@ -89,7 +89,7 @@ ${trade.target2}
 
                 // TP1
                 else if (
-                    trade.status === 'open' &&
+                    (trade.status === 'open' || trade.status === 'secured') &&
                     trade.target1 != null &&
                     price >= Number(trade.target1)
                 ) {
@@ -114,6 +114,77 @@ ${trade.target2 || '-'}
 
                     newStatus = 'target1';
                     resultType = 'TP1';
+                }
+
+                // =========================
+                // SECURE ENTRY - BUY
+                // =========================
+                else if (
+                    trade.status === 'open' &&
+                    trade.target1 != null &&
+                    Number.isFinite(Number(trade.entry)) &&
+                    Number.isFinite(Number(trade.target1)) &&
+                    price > Number(trade.entry) &&
+                    price < Number(trade.target1) &&
+                    (
+                        price >= Number(trade.target1) - 2 ||
+                        (
+                            (
+                                price - Number(trade.entry)
+                            ) /
+                            (
+                                Number(trade.target1) -
+                                Number(trade.entry)
+                            )
+                        ) >= 0.85
+                    )
+                ) {
+                    message = `🛡️ تم تأمين صفقة الذهب
+
+🥇 الزوج: XAUUSD
+📈 الاتجاه: BUY
+
+🎯 الدخول:
+${trade.entry}
+
+💰 السعر الحالي:
+${price}
+
+🎯 TP1:
+${trade.target1}
+
+✅ تم تفعيل تأمين الدخول.
+
+إذا عاد السعر إلى سعر الدخول قبل TP1 سيتم إغلاق الصفقة على نقطة التعادل.`;
+
+                    newStatus = 'secured';
+                    resultType = 'SECURED';
+                }
+
+                // =========================
+                // BREAKEVEN - BUY
+                // =========================
+                else if (
+                    trade.status === 'secured' &&
+                    Number.isFinite(Number(trade.entry)) &&
+                    price <= Number(trade.entry)
+                ) {
+                    message = `🛡️ تم إغلاق صفقة الذهب على تأمين الدخول
+
+🥇 الزوج: XAUUSD
+📈 الاتجاه: BUY
+
+🎯 الدخول:
+${trade.entry}
+
+💰 سعر الإغلاق:
+${price}
+
+✅ الصفقة عادت إلى نقطة الدخول بعد تفعيل الحماية.
+تم الإغلاق على نقطة التعادل.`;
+
+                    newStatus = 'closed';
+                    resultType = 'BREAKEVEN';
                 }
 
                 // SL
@@ -178,7 +249,7 @@ ${trade.target2}
 
                 // TP1
                 else if (
-                    trade.status === 'open' &&
+                    (trade.status === 'open' || trade.status === 'secured') &&
                     trade.target1 != null &&
                     price <= Number(trade.target1)
                 ) {
@@ -205,6 +276,77 @@ ${trade.target2 || '-'}
                     resultType = 'TP1';
                 }
 
+                // =========================
+                // SECURE ENTRY - SELL
+                // =========================
+                else if (
+                    trade.status === 'open' &&
+                    trade.target1 != null &&
+                    Number.isFinite(Number(trade.entry)) &&
+                    Number.isFinite(Number(trade.target1)) &&
+                    price < Number(trade.entry) &&
+                    price > Number(trade.target1) &&
+                    (
+                        price <= Number(trade.target1) + 2 ||
+                        (
+                            (
+                                Number(trade.entry) - price
+                            ) /
+                            (
+                                Number(trade.entry) -
+                                Number(trade.target1)
+                            )
+                        ) >= 0.85
+                    )
+                ) {
+                    message = `🛡️ تم تأمين صفقة الذهب
+
+🥇 الزوج: XAUUSD
+📉 الاتجاه: SELL
+
+🎯 الدخول:
+${trade.entry}
+
+💰 السعر الحالي:
+${price}
+
+🎯 TP1:
+${trade.target1}
+
+✅ تم تفعيل تأمين الدخول.
+
+إذا عاد السعر إلى سعر الدخول قبل TP1 سيتم إغلاق الصفقة على نقطة التعادل.`;
+
+                    newStatus = 'secured';
+                    resultType = 'SECURED';
+                }
+
+                // =========================
+                // BREAKEVEN - SELL
+                // =========================
+                else if (
+                    trade.status === 'secured' &&
+                    Number.isFinite(Number(trade.entry)) &&
+                    price >= Number(trade.entry)
+                ) {
+                    message = `🛡️ تم إغلاق صفقة الذهب على تأمين الدخول
+
+🥇 الزوج: XAUUSD
+📉 الاتجاه: SELL
+
+🎯 الدخول:
+${trade.entry}
+
+💰 سعر الإغلاق:
+${price}
+
+✅ الصفقة عادت إلى نقطة الدخول بعد تفعيل الحماية.
+تم الإغلاق على نقطة التعادل.`;
+
+                    newStatus = 'closed';
+                    resultType = 'BREAKEVEN';
+                }
+
                 // SL
                 else if (
                     trade.stop_loss != null &&
@@ -227,6 +369,7 @@ ${trade.stop_loss}
 ❌ انتهت الصفقة عند وقف الخسارة.`;
 
                     newStatus = 'closed';
+                    resultType = 'SL';
                 }
             }
 
@@ -301,6 +444,27 @@ ${trade.stop_loss}
                     } catch (e) {
                         console.log(
                             'Group result send error:',
+                            e.message
+                        );
+                    }
+                }
+
+
+                // تحديثات الصفقة المجانية للجروب العام
+                if (
+                    String(trade.telegram_id) === 'VIP_FREE' &&
+                    config.mainGroupId
+                ) {
+                    try {
+                        await bot.telegram.sendMessage(
+                            config.mainGroupId,
+                            `🆓 تحديث الصفقة المجانية
+
+${message}`
+                        );
+                    } catch (e) {
+                        console.log(
+                            'Free trade result send error:',
                             e.message
                         );
                     }

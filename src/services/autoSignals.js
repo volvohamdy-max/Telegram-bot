@@ -1,7 +1,16 @@
 const { analyzePair } = require('./analysisGate');
 const { buildGoldScalpResult } = require('./goldScalper');
 const { allUsers } = require('../database/users');
-const { addTrade } = require('../database/trades');
+const {
+  addTrade,
+  getOpenTrades,
+  markTradeAsFree
+} = require('../database/trades');
+
+const {
+  canSendFreeSignal,
+  markFreeSignalSent
+} = require('../database/freeSignalState');
 const { getLivePrice } = require('./priceService');
 const { getCandles } = require('./marketService');
 const { calculateTradeLevels } = require('./tradeEngine');
@@ -24,6 +33,8 @@ async function scanMarket(bot) {
     console.log('⏸️ Auto Signals disabled from Admin Control Center');
     return;
   }
+  const openTrades = getOpenTrades();
+
   const scanStart = Date.now();
   console.log("🚀 SCAN START:", new Date().toLocaleTimeString());
 console.log("🚨 AUTO SIGNALS FILE IS RUNNING");
@@ -37,6 +48,7 @@ console.log("🚨 AUTO SIGNALS FILE IS RUNNING");
         pair === 'XAUUSD'
           ? await buildGoldScalpResult()
           : await analyzePair(pair);
+
 console.log("🧠 SIGNAL DEBUG:", JSON.stringify({
     pair,
     signal: result.signal,
@@ -82,6 +94,57 @@ if (
           `🟡 Gold scalp rejected: ${result.scalpMeta?.status || 'NOT_READY'}`
         );
         continue;
+      }
+
+      // ==========================================
+      // GOLD SCALP QUALITY FILTER
+      // Only strong execution grades are broadcast.
+      // ==========================================
+
+      if (
+        pair === 'XAUUSD' &&
+        result.scalpMeta?.ready
+      ) {
+        const allowedGrades =
+          new Set([
+            'A+',
+            'A',
+            'TECH-A',
+            'TECH-BREAKOUT'
+          ]);
+
+        const grade =
+          String(
+            result.scalpMeta.grade || ''
+          ).toUpperCase();
+
+        const score =
+          Number(
+            result.scalpMeta.score || 0
+          );
+
+        const ai =
+          Number(
+            result.scalpMeta.aiConfidence || 0
+          );
+
+        if (!allowedGrades.has(grade)) {
+          console.log(
+            `🟡 Gold scalp blocked by grade: ${grade || 'NONE'} | score=${score} | ai=${ai}`
+          );
+
+          continue;
+        }
+
+        // Extra safety:
+        // even allowed grades need minimum technical quality.
+        if (score < 72) {
+          console.log(
+            `🟡 Gold scalp blocked by score: ${score}/100`
+          );
+
+          continue;
+        }
       }
 
       let levels;
@@ -156,6 +219,35 @@ if (
         continue;
       }
 
+      // Absolute stop-distance protection for Gold Scalping
+      if (
+        pair === 'XAUUSD' &&
+        Number.isFinite(Number(levels.riskDistance))
+      ) {
+        const atr =
+          Number(
+            result.scalpMeta?.atr5 ||
+            result.indicators?.atr ||
+            0
+          );
+
+        const maxStopDistance =
+          Number.isFinite(atr) && atr > 0
+            ? Math.max(atr * 1.80, 8.0)
+            : 8.0;
+
+        if (
+          Number(levels.riskDistance) >
+          maxStopDistance
+        ) {
+          console.log(
+            `🟡 Gold scalp blocked: SL distance ${Number(levels.riskDistance).toFixed(2)} > max ${maxStopDistance.toFixed(2)}`
+          );
+
+          continue;
+        }
+      }
+
       // AUTO SCALP ENTRY
       // XAUUSD already passed the dedicated Gold Scalper Engine.
       let scalpEntry;
@@ -192,17 +284,96 @@ if (
         `✅ AUTO SCALP ENTRY READY ${pair} | 5M=${scalpEntry.trigger5m}`
       );
 
-      const key =
-        pair +
-        result.signal.action +
-        Number(levels.entry).toFixed(2);
+      // ==========================================
+      // SMART DUPLICATE / SAME-SETUP PROTECTION
+      // ==========================================
 
-      if (lastSignals[pair] === key)
-        continue;
+      const now = Date.now();
 
-      lastSignals[pair] = key;
+      const currentEntry =
+        Number(levels.entry);
 
-      addTrade({
+      const currentAtr =
+        Number(
+          result.scalpMeta?.atr5 ||
+          levels.atr ||
+          result.indicators?.atr ||
+          0
+        );
+
+      const currentDirection =
+        String(result.signal.action);
+
+      const currentMode =
+        String(
+          result.scalpMeta?.entryMode ||
+          'UNKNOWN'
+        );
+
+      const previousSignal =
+        lastSignals[pair];
+
+      if (previousSignal) {
+        const sameDirection =
+          previousSignal.direction ===
+          currentDirection;
+
+        const sameMode =
+          previousSignal.mode ===
+          currentMode;
+
+        const elapsed =
+          now -
+          previousSignal.time;
+
+        const priceDistance =
+          Math.abs(
+            currentEntry -
+            previousSignal.entry
+          );
+
+        const referenceAtr =
+          Math.max(
+            currentAtr || 0,
+            previousSignal.atr || 0,
+            1
+          );
+
+        const enoughPriceMovement =
+          priceDistance >=
+          referenceAtr * 0.80;
+
+        const enoughTime =
+          elapsed >=
+          20 * 60 * 1000;
+
+        if (
+          sameDirection &&
+          sameMode &&
+          !enoughPriceMovement &&
+          !enoughTime
+        ) {
+          console.log(
+            `♻️ DUPLICATE GOLD SETUP SKIPPED | ` +
+            `${currentDirection} ${currentMode} | ` +
+            `entry=${currentEntry.toFixed(2)} | ` +
+            `move=${priceDistance.toFixed(2)} | ` +
+            `required=${(referenceAtr * 0.80).toFixed(2)}`
+          );
+
+          continue;
+        }
+      }
+
+      lastSignals[pair] = {
+        direction: currentDirection,
+        mode: currentMode,
+        entry: currentEntry,
+        atr: currentAtr,
+        time: now
+      };
+
+      const tradeInsert = addTrade({
         telegram_id: "VIP",
         pair: pair,
         action: result.signal.action,
@@ -211,6 +382,9 @@ if (
         target1: levels.tp1,
         target2: levels.tp2
       });
+
+      const tradeId =
+        Number(tradeInsert?.lastInsertRowid || 0);
 
       const livePrice = Number(levels.entry);
 
@@ -265,9 +439,23 @@ ${Number(levels.tp2).toFixed(2)}
 ${result.signal.confidence}%
 
 ${pair === 'XAUUSD' && result.scalpMeta?.ready
-  ? `⚡ نوع الإشارة: GOLD SCALP ${result.scalpMeta.grade}
+  ? (() => {
+      const gradeMap = {
+        'A+': '🔥 قوية جدًا',
+        'A': '✅ قوية',
+        'TECH-A': '🧠 فنية مؤكدة',
+        'TECH-BREAKOUT': '🚀 اختراق فني قوي'
+      };
+
+      const quality =
+        gradeMap[result.scalpMeta.grade] ||
+        '✅ قوية';
+
+      return `⚡ نوع الإشارة: سكالب ذهب
+🏅 جودة الفرصة: ${quality}
 ⭐ Scalp Score: ${result.scalpMeta.score}/100
-⏱️ الفريم التنفيذي: 5M`
+⏱️ الفريم التنفيذي: 5M`;
+    })()
   : ''}
 
 📊 ATR
@@ -308,15 +496,55 @@ for (const user of users) {
     }
 }
 
-// إرسال للجروب الرئيسي
-try {
-    await bot.telegram.sendMessage(
-        config.mainGroupId,
-        message
-    );
-} catch (e) {
-    console.log("Group send error:", e.message);
-}
+
+
+      // ==================================================
+      // FREE PUBLIC SIGNAL — مرة واحدة كل 24 ساعة
+      // ==================================================
+
+      const freeEligible =
+        pair === 'XAUUSD' &&
+        result.scalpMeta?.ready === true &&
+        Number(result.scalpMeta?.score || 0) >= 80 &&
+        canSendFreeSignal(24);
+
+      if (
+        freeEligible &&
+        config.mainGroupId
+      ) {
+        try {
+          const freeMessage =
+`🆓 صفقة مجانية من FOREX AI
+━━━━━━━━━━━━━━━━━━
+
+${message}
+
+💎 أعضاء VIP يحصلون على جميع الفرص والتحديثات بشكل مستمر.
+
+⚠️ التحليل آلي ومعلوماتي ولا يضمن نتائج التداول.`;
+
+          await bot.telegram.sendMessage(
+            config.mainGroupId,
+            freeMessage
+          );
+
+          if (tradeId > 0) {
+            markTradeAsFree(tradeId);
+          }
+
+          markFreeSignalSent();
+
+          console.log(
+            `🆓 FREE SIGNAL SENT | Trade ${tradeId}`
+          );
+
+        } catch (e) {
+          console.log(
+            'Free signal send error:',
+            e.message
+          );
+        }
+      }
 
 // إرسال للأدمن إذا لم يكن موجودًا في قاعدة البيانات
 for (const adminId of config.adminIds) {
@@ -352,4 +580,4 @@ console.log(
     console.log("✅ Market Scan Finished");
 }
 
-module.exports = { scanMarket };
+

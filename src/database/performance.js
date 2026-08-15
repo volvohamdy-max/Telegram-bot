@@ -185,6 +185,76 @@ function recordSl(trade, price) {
   );
 }
 
+
+function goldPipsForRow(row) {
+  if (
+    String(row.pair || '').toUpperCase() !== 'XAUUSD'
+  ) {
+    return null;
+  }
+
+  const PIP_SIZE = 0.01;
+
+  const action =
+    String(row.action || '')
+      .toUpperCase();
+
+  const entry =
+    Number(row.entry);
+
+  if (
+    !Number.isFinite(entry) ||
+    (action !== 'BUY' && action !== 'SELL')
+  ) {
+    return null;
+  }
+
+  function moveTo(price) {
+    const exit = Number(price);
+
+    if (!Number.isFinite(exit)) {
+      return null;
+    }
+
+    const move =
+      action === 'BUY'
+        ? exit - entry
+        : entry - exit;
+
+    return move / PIP_SIZE;
+  }
+
+  if (row.outcome === 'TP2') {
+    return moveTo(row.target2);
+  }
+
+  if (row.outcome === 'SL') {
+    return moveTo(row.stop_loss);
+  }
+
+  if (row.outcome === 'TP1_THEN_SL') {
+    const tp1Pips =
+      moveTo(row.target1);
+
+    const slPips =
+      moveTo(row.stop_loss);
+
+    if (
+      !Number.isFinite(tp1Pips) ||
+      !Number.isFinite(slPips)
+    ) {
+      return null;
+    }
+
+    return (
+      tp1Pips * 0.5 +
+      slPips * 0.5
+    );
+  }
+
+  return null;
+}
+
 function getStats(days) {
   ensureTable();
 
@@ -220,6 +290,14 @@ function getStats(days) {
 
   const sl = rows.filter(
     (x) => Number(x.sl_hit) === 1
+  ).length;
+
+  const tp1ThenSl = rows.filter(
+    (x) => x.outcome === 'TP1_THEN_SL'
+  ).length;
+
+  const pureSl = rows.filter(
+    (x) => x.outcome === 'SL'
   ).length;
 
   const rValues = closed
@@ -263,6 +341,71 @@ function getStats(days) {
     ? reachedRValues.reduce((a, b) => a + b, 0)
     : null;
 
+
+  const pipResults = closed
+    .map((row) => {
+      const pips = goldPipsForRow(row);
+
+      return {
+        row,
+        pips
+      };
+    })
+    .filter((x) =>
+      Number.isFinite(x.pips)
+    );
+
+  const totalPips = pipResults.length
+    ? pipResults.reduce(
+        (sum, x) => sum + x.pips,
+        0
+      )
+    : null;
+
+  const avgPips = pipResults.length
+    ? totalPips / pipResults.length
+    : null;
+
+  const winningPipTrades =
+    pipResults.filter(
+      (x) => x.pips > 0
+    ).length;
+
+  const losingPipTrades =
+    pipResults.filter(
+      (x) => x.pips < 0
+    ).length;
+
+  const breakevenPipTrades =
+    pipResults.filter(
+      (x) =>
+        Math.abs(x.pips) < 0.0001
+    ).length;
+
+  const bestPipTrade =
+    pipResults.length
+      ? pipResults.reduce(
+          (best, x) =>
+            !best ||
+            x.pips > best.pips
+              ? x
+              : best,
+          null
+        )
+      : null;
+
+  const worstPipTrade =
+    pipResults.length
+      ? pipResults.reduce(
+          (worst, x) =>
+            !worst ||
+            x.pips < worst.pips
+              ? x
+              : worst,
+          null
+        )
+      : null;
+
   const byPair = {};
 
   for (const row of rows) {
@@ -299,12 +442,49 @@ function getStats(days) {
     tp1,
     tp2,
     sl,
+    pureSl,
+    tp1ThenSl,
     tp1Rate: rows.length ? (tp1 / rows.length) * 100 : 0,
     tp2Rate: rows.length ? (tp2 / rows.length) * 100 : 0,
     slRate: rows.length ? (sl / rows.length) * 100 : 0,
     avgR,
     totalR,
     reachedR,
+
+    totalPips,
+    avgPips,
+    winningPipTrades,
+    losingPipTrades,
+    breakevenPipTrades,
+
+    bestPipTrade:
+      bestPipTrade
+        ? {
+            tradeId:
+              bestPipTrade.row.trade_id,
+            pips:
+              bestPipTrade.pips,
+            action:
+              bestPipTrade.row.action,
+            outcome:
+              bestPipTrade.row.outcome
+          }
+        : null,
+
+    worstPipTrade:
+      worstPipTrade
+        ? {
+            tradeId:
+              worstPipTrade.row.trade_id,
+            pips:
+              worstPipTrade.pips,
+            action:
+              worstPipTrade.row.action,
+            outcome:
+              worstPipTrade.row.outcome
+          }
+        : null,
+
     byPair
   };
 }

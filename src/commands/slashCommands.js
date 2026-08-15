@@ -280,8 +280,51 @@ ${PAIRS.join(', ')}`;
 ${PAIRS.join(', ')}`;
 }
 
+const {
+  consumeFeature,
+  limitMessage
+} = require('../services/dailyUsageGate');
+
+
+async function checkDailySlashLimit(ctx, feature) {
+  const result =
+    consumeFeature(
+      ctx.from?.id,
+      feature
+    );
+
+  if (result.allowed) {
+    return true;
+  }
+
+  return ctx.reply(
+    limitMessage(
+      feature,
+      isEn(ctx)
+    ),
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                isEn(ctx)
+                  ? '💎 Upgrade to VIP'
+                  : '💎 اشترك VIP',
+              callback_data:
+                'vip_monthly'
+            }
+          ]
+        ]
+      }
+    }
+  ).then(() => false);
+}
+
 function registerSlashCommands(bot) {
   bot.command('gold', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'analysis'))) return;
+
     try {
       await ctx.reply(isEn(ctx) ? '🥇 Analyzing XAUUSD...' : '🥇 جاري تحليل الذهب XAUUSD...');
       const result = await analyzePair('XAUUSD');
@@ -293,6 +336,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('analysis', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'analysis'))) return;
+
     const pair = parsePair(ctx);
 
     if (!pair) {
@@ -314,6 +359,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('trade', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'trade_now'))) return;
+
     try {
       await ctx.reply(isEn(ctx) ? '⚡ Searching for the best trade...' : '⚡ جاري البحث عن أفضل صفقة...');
       const trade = await getBestTrade();
@@ -333,6 +380,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('scanner', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'scanner'))) return;
+
     try {
       await ctx.reply(isEn(ctx) ? '🔎 Scanning markets...' : '🔎 جاري فحص الأسواق...');
       const rows = await scanMarkets();
@@ -344,6 +393,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('trend', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'trend_hunter'))) return;
+
     try {
       await ctx.reply(isEn(ctx) ? '📡 Scanning trends...' : '📡 جاري فحص الترندات...');
       const rows = await scanTrends();
@@ -355,6 +406,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('map', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'market_map'))) return;
+
     try {
       await ctx.reply(isEn(ctx) ? '🧭 Building Market Map...' : '🧭 جاري بناء خريطة السوق...');
       const data = await buildMarketMap();
@@ -366,6 +419,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('news', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'news'))) return;
+
     try {
       const events = await getEconomicCalendar();
       return ctx.reply(upcomingNewsText(ctx, events), menu(ctx));
@@ -376,6 +431,8 @@ function registerSlashCommands(bot) {
   });
 
   bot.command('alerts', async (ctx) => {
+    if (!(await checkDailySlashLimit(ctx, 'alerts'))) return;
+
     return ctx.reply(
       isEn(ctx)
         ? '🔔 Open “Alerts” from the keyboard below to manage pairs and confidence settings.'

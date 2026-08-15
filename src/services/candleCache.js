@@ -9,7 +9,7 @@ function getTTL(key) {
     value.includes('xauusd') &&
     value.includes('5min')
   ) {
-    return 30 * 1000; // 30 seconds
+    return 60 * 1000; // 60 seconds
   }
 
   // 15M trend doesn't need refreshing every few seconds
@@ -17,7 +17,7 @@ function getTTL(key) {
     value.includes('xauusd') &&
     value.includes('15min')
   ) {
-    return 2 * 60 * 1000; // 2 minutes
+    return 3 * 60 * 1000; // 3 minutes
   }
 
   return 5 * 60 * 1000; // 5 minutes

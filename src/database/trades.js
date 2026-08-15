@@ -30,7 +30,7 @@ function getOpenTrades() {
         SELECT *
         FROM trades
         WHERE pair = 'XAUUSD'
-          AND status IN ('open', 'target1')
+          AND status IN ('open', 'secured', 'target1')
         ORDER BY id DESC
     `).all();
 }
@@ -38,6 +38,13 @@ function updateTradeStatus(id, status) {
     return db.prepare(
         "UPDATE trades SET status = ? WHERE id = ?"
     ).run(status, id);
+}
+
+
+function markTradeAsFree(id) {
+  return db.prepare(
+    "UPDATE trades SET telegram_id = 'VIP_FREE' WHERE id = ?"
+  ).run(Number(id));
 }
 
 function deleteNonGoldTrades() {
@@ -54,6 +61,7 @@ module.exports = {
     addTrade,
     getOpenTrades,
     updateTradeStatus,
+    markTradeAsFree,
     deleteNonGoldTrades,
     closeAllOpenTrades
 };

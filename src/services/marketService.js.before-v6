@@ -1,0 +1,864 @@
+const axios = require('axios');
+const config = require('../config');
+const { getCache, setCache } = require('./candleCache');
+
+const SUPPORTED_PAIRS = new Set([
+  'XAUUSD','BTCUSD','EURUSD','GBPUSD',
+  'USDJPY','EURJPY','GBPJPY','CHFJPY'
+]);
+
+const priceCache = new Map();
+const candleRequests = new Map();
+const priceRequests = new Map();
+
+const requestQueue = [];
+let queueRunning = false;
+let lastTwelveRequestAt = 0;
+let twelveCooldownUntil = 0;
+
+const TWELVE_MIN_REQUEST_GAP_MS =
+  Number(process.env.TWELVE_MIN_REQUEST_GAP_MS) || 2000;
+const TWELVE_429_COOLDOWN_MS =
+  Number(process.env.TWELVE_429_COOLDOWN_MS) || 30000;
+const PRICE_FRESH_MS =
+  Number(process.env.MARKET_PRICE_CACHE_MS) || 30000;
+const PRICE_STALE_MAX_MS =
+  Number(process.env.MARKET_PRICE_STALE_MS) || 5 * 60 * 1000;
+const PROVIDER_TIMEOUT_MS =
+  Number(process.env.MARKET_PROVIDER_TIMEOUT_MS) || 10000;
+
+const providerHealth = new Map();
+const providerCircuit = new Map();
+
+const PROVIDER_FAIL_LIMIT =
+  Number(process.env.MARKET_PROVIDER_FAIL_LIMIT) || 3;
+
+const PROVIDER_COOLDOWN_MS =
+  Number(process.env.MARKET_PROVIDER_COOLDOWN_MS) || 60 * 1000;
+
+const MAX_TRADE_PRICE_AGE_MS =
+  Number(process.env.MAX_TRADE_PRICE_AGE_MS) || 90 * 1000;
+
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function pairKey(pair) {
+  return String(pair || '').trim().toUpperCase();
+}
+
+function assertSupportedPair(pair) {
+  const key = pairKey(pair);
+  if (!SUPPORTED_PAIRS.has(key)) {
+    throw new Error(`Unsupported market pair: ${key || 'EMPTY'}`);
+  }
+  return key;
+}
+
+function positive(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function recordProvider(provider, ok, error = null) {
+  const s = providerHealth.get(provider) || {
+    ok: 0, failed: 0, lastError: null,
+    lastSuccessAt: null, lastFailureAt: null
+  };
+  if (ok) {
+    s.ok++;
+    s.lastSuccessAt = Date.now();
+    s.lastError = null;
+  } else {
+    s.failed++;
+    s.lastFailureAt = Date.now();
+    s.lastError = error?.response?.status || error?.message || String(error || 'unknown');
+  }
+  providerHealth.set(provider, s);
+}
+
+
+function providerAvailable(name) {
+  const state = providerCircuit.get(name);
+
+  if (!state) return true;
+
+  if (state.blockedUntil && state.blockedUntil > Date.now()) {
+    return false;
+  }
+
+  if (state.blockedUntil && state.blockedUntil <= Date.now()) {
+    providerCircuit.delete(name);
+    return true;
+  }
+
+  return true;
+}
+
+function providerSuccess(name) {
+  providerCircuit.delete(name);
+}
+
+function providerFailure(name, error) {
+  const prev = providerCircuit.get(name) || {
+    failures: 0,
+    blockedUntil: 0
+  };
+
+  prev.failures += 1;
+
+  const status = error?.response?.status;
+
+  if (
+    status === 429 ||
+    prev.failures >= PROVIDER_FAIL_LIMIT
+  ) {
+    prev.blockedUntil =
+      Date.now() + PROVIDER_COOLDOWN_MS;
+
+    console.log(
+      `🧯 Provider circuit OPEN: ${name} for ${Math.round(PROVIDER_COOLDOWN_MS / 1000)}s`
+    );
+  }
+
+  providerCircuit.set(name, prev);
+}
+
+function metalsApiKey() {
+  return (
+    config.metalsApiKey ||
+    process.env.METALS_API_KEY ||
+    ''
+  );
+}
+
+function formatTwelveSymbol(pair) {
+  const p = pairKey(pair);
+  if (p === 'XAUUSD') return 'XAU/USD';
+  if (p === 'BTCUSD') return 'BTC/USD';
+  return `${p.slice(0,3)}/${p.slice(3,6)}`;
+}
+
+function alphaKey() {
+  return config.alphaVantageKey || process.env.ALPHA_VANTAGE_API_KEY || '';
+}
+
+function enqueueTwelve(task, label, priority = 0) {
+  return new Promise((resolve, reject) => {
+    requestQueue.push({
+      task, label, priority, resolve, reject, createdAt: Date.now()
+    });
+    requestQueue.sort((a,b) =>
+      b.priority !== a.priority
+        ? b.priority - a.priority
+        : a.createdAt - b.createdAt
+    );
+    processTwelveQueue().catch(err =>
+      console.log('❌ TwelveData queue error:', err.message)
+    );
+  });
+}
+
+async function waitForTwelveSlot() {
+  const now = Date.now();
+  if (twelveCooldownUntil > now) {
+    const wait = twelveCooldownUntil - now;
+    console.log(`🧊 TwelveData cooldown: ${Math.ceil(wait/1000)}s`);
+    await sleep(wait);
+  }
+  const elapsed = Date.now() - lastTwelveRequestAt;
+  if (elapsed < TWELVE_MIN_REQUEST_GAP_MS) {
+    await sleep(TWELVE_MIN_REQUEST_GAP_MS - elapsed);
+  }
+  lastTwelveRequestAt = Date.now();
+}
+
+async function processTwelveQueue() {
+  if (queueRunning) return;
+  queueRunning = true;
+  try {
+    while (requestQueue.length) {
+      const item = requestQueue.shift();
+      try {
+        await waitForTwelveSlot();
+        item.resolve(await item.task());
+      } catch (err) {
+        item.reject(err);
+      }
+    }
+  } finally {
+    queueRunning = false;
+  }
+}
+
+async function twelveRequest(url, options, label, priority = 0) {
+  if (!config.twelveDataKey) {
+    throw new Error('Twelve Data API key not configured');
+  }
+  try {
+    const res = await enqueueTwelve(
+      () => axios.get(url, options),
+      label,
+      priority
+    );
+    recordProvider('TwelveData', true);
+    return res;
+  } catch (err) {
+    recordProvider('TwelveData', false, err);
+    if (err.response?.status === 429) {
+      twelveCooldownUntil = Math.max(
+        twelveCooldownUntil,
+        Date.now() + TWELVE_429_COOLDOWN_MS
+      );
+      console.log(`⚠️ TwelveData 429: ${label}`);
+      console.log(`🧊 TwelveData cooldown activated (${Math.round(TWELVE_429_COOLDOWN_MS/1000)}s)`);
+    }
+    throw err;
+  }
+}
+
+function cachePrice(pair, price, provider) {
+  const p = positive(price);
+  if (p == null) return false;
+  priceCache.set(pairKey(pair), { price: p, provider, time: Date.now() });
+  return true;
+}
+
+function freshPrice(pair) {
+  const item = priceCache.get(pairKey(pair));
+  if (!item) return null;
+  return Date.now() - item.time <= PRICE_FRESH_MS ? item : null;
+}
+
+function stalePrice(pair) {
+  const key = pairKey(pair);
+  const item = priceCache.get(key);
+  if (!item) return null;
+  if (Date.now() - item.time > PRICE_STALE_MAX_MS) {
+    priceCache.delete(key);
+    return null;
+  }
+  return item;
+}
+
+async function priceFromTwelve(pair) {
+  const { data } = await twelveRequest(
+    'https://api.twelvedata.com/price',
+    {
+      params: {
+        symbol: formatTwelveSymbol(pair),
+        apikey: config.twelveDataKey
+      },
+      timeout: PROVIDER_TIMEOUT_MS
+    },
+    `price ${pair}`,
+    30
+  );
+  const p = positive(data?.price);
+  if (p == null) throw new Error(data?.message || `No TwelveData price for ${pair}`);
+  return p;
+}
+
+async function priceFromBinance(pair) {
+  if (pair !== 'BTCUSD') throw new Error('Binance only configured for BTCUSD');
+  const { data } = await axios.get(
+    'https://api.binance.com/api/v3/ticker/price',
+    { params: { symbol: 'BTCUSDT' }, timeout: PROVIDER_TIMEOUT_MS }
+  );
+  const p = positive(data?.price);
+  if (p == null) throw new Error('Invalid Binance BTC price');
+  recordProvider('Binance', true);
+  return p;
+}
+
+async function priceFromCoinGecko(pair) {
+  if (pair !== 'BTCUSD') throw new Error('CoinGecko only configured for BTCUSD');
+  const { data } = await axios.get(
+    'https://api.coingecko.com/api/v3/simple/price',
+    {
+      params: { ids: 'bitcoin', vs_currencies: 'usd' },
+      timeout: PROVIDER_TIMEOUT_MS
+    }
+  );
+  const p = positive(data?.bitcoin?.usd);
+  if (p == null) throw new Error('Invalid CoinGecko BTC price');
+  recordProvider('CoinGecko', true);
+  return p;
+}
+
+async function priceFromAlpha(pair) {
+  const key = alphaKey();
+  if (!key) throw new Error('Alpha Vantage API key not configured');
+
+  if (pair === 'XAUUSD') {
+    const { data } = await axios.get(
+      'https://www.alphavantage.co/query',
+      {
+        params: {
+          function: 'GOLD_SILVER_SPOT',
+          symbol: 'XAU',
+          apikey: key
+        },
+        timeout: PROVIDER_TIMEOUT_MS
+      }
+    );
+    const p = positive(
+      data?.price ?? data?.data?.[0]?.price ?? data?.data?.[0]?.value
+    );
+    if (p == null) {
+      throw new Error(data?.Information || data?.Note || 'Invalid Alpha Vantage XAU price');
+    }
+    recordProvider('AlphaVantage', true);
+    return p;
+  }
+
+  const from = pair.slice(0,3);
+  const to = pair.slice(3,6);
+  const { data } = await axios.get(
+    'https://www.alphavantage.co/query',
+    {
+      params: {
+        function: 'CURRENCY_EXCHANGE_RATE',
+        from_currency: from,
+        to_currency: to,
+        apikey: key
+      },
+      timeout: PROVIDER_TIMEOUT_MS
+    }
+  );
+  const p = positive(
+    data?.['Realtime Currency Exchange Rate']?.['5. Exchange Rate']
+  );
+  if (p == null) {
+    throw new Error(data?.Information || data?.Note || `Invalid Alpha Vantage price for ${pair}`);
+  }
+  recordProvider('AlphaVantage', true);
+  return p;
+}
+
+function eodhdSymbol(pair) {
+  const override = process.env[`EODHD_SYMBOL_${pair}`];
+  if (override) return override;
+  if (pair === 'BTCUSD') return 'BTC-USD.CC';
+  if (pair === 'XAUUSD') return 'XAUUSD.FOREX';
+  return `${pair}.FOREX`;
+}
+
+async function priceFromEodhd(pair) {
+  if (!config.eodhdApiKey) throw new Error('EODHD API key not configured');
+  const symbol = eodhdSymbol(pair);
+  const { data } = await axios.get(
+    `https://eodhd.com/api/real-time/${encodeURIComponent(symbol)}`,
+    {
+      params: { api_token: config.eodhdApiKey, fmt: 'json' },
+      timeout: PROVIDER_TIMEOUT_MS
+    }
+  );
+  const p = positive(data?.close ?? data?.price ?? data?.last);
+  if (p == null) throw new Error(data?.message || `Invalid EODHD price for ${pair} (${symbol})`);
+  recordProvider('EODHD', true);
+  return p;
+}
+
+
+async function priceFromMetalsApi(pair) {
+  if (pair !== 'XAUUSD') {
+    throw new Error('Metals-API provider only supports XAUUSD here');
+  }
+
+  const key = metalsApiKey();
+
+  if (!key) {
+    throw new Error('Metals-API key not configured');
+  }
+
+  const { data } = await axios.get(
+    'https://metals-api.com/api/latest',
+    {
+      params: {
+        access_key: key,
+        base: 'USD',
+        symbols: 'XAU'
+      },
+      timeout: PROVIDER_TIMEOUT_MS
+    }
+  );
+
+  if (!data?.success) {
+    throw new Error(
+      data?.error?.info ||
+      data?.error?.message ||
+      'Metals-API request failed'
+    );
+  }
+
+  const rate = positive(data?.rates?.XAU);
+
+  if (rate == null) {
+    throw new Error('Invalid Metals-API XAU rate');
+  }
+
+  // Metals-API may express the rate as XAU per USD.
+  // Convert to USD per XAU when the returned value is < 1.
+  const price =
+    rate < 1
+      ? 1 / rate
+      : rate;
+
+  const finalPrice = positive(price);
+
+  if (finalPrice == null) {
+    throw new Error('Invalid Metals-API XAUUSD price');
+  }
+
+  recordProvider('MetalsAPI', true);
+  return finalPrice;
+}
+
+function pricePlan(pair) {
+  if (pair === 'BTCUSD') {
+    return [
+      ['Binance', priceFromBinance],
+      ['CoinGecko', priceFromCoinGecko],
+      ['TwelveData', priceFromTwelve],
+      ['AlphaVantage', priceFromAlpha],
+      ['EODHD', priceFromEodhd]
+    ];
+  }
+
+  if (pair === 'XAUUSD') {
+    return [
+      ['TwelveData', priceFromTwelve],
+      ['MetalsAPI', priceFromMetalsApi],
+      ['AlphaVantage', priceFromAlpha],
+      ['EODHD', priceFromEodhd]
+    ];
+  }
+
+  return [
+    ['TwelveData', priceFromTwelve],
+    ['AlphaVantage', priceFromAlpha],
+    ['EODHD', priceFromEodhd]
+  ];
+}
+
+function sanityPrice(pair, candidate) {
+  const p = positive(candidate);
+  if (p == null) return false;
+  const old = stalePrice(pair);
+  if (!old) return true;
+
+  const ref = Number(old.price);
+  if (!Number.isFinite(ref) || ref <= 0) return true;
+
+  const dev = Math.abs(p - ref) / ref;
+  const maxDev = pair === 'BTCUSD' ? 0.08 : pair === 'XAUUSD' ? 0.03 : 0.015;
+
+  if (dev > maxDev) {
+    console.log(
+      `⚠️ Price sanity reject ${pair}: ${p} vs ${ref} (${(dev*100).toFixed(2)}%)`
+    );
+    return false;
+  }
+  return true;
+}
+
+async function getPrice(pair) {
+  const key = assertSupportedPair(pair);
+
+  const fresh = freshPrice(key);
+  if (fresh) {
+    console.log(`💰 Price cache: ${key} | ${fresh.provider}`);
+    return fresh.price;
+  }
+
+  if (priceRequests.has(key)) {
+    console.log(`⏳ Shared price request: ${key}`);
+    return priceRequests.get(key);
+  }
+
+  const promise = (async () => {
+    let lastError = null;
+
+    for (const [name, fn] of pricePlan(key)) {
+      if (!providerAvailable(name)) {
+        console.log(
+          `⏭️ Provider skipped by circuit breaker: ${name}`
+        );
+        continue;
+      }
+
+      try {
+        console.log(`🌐 Price provider ${name}: ${key}`);
+        const p = await fn(key);
+
+        if (!sanityPrice(key, p)) {
+          throw new Error(`Sanity check rejected ${name} price`);
+        }
+
+        providerSuccess(name);
+        cachePrice(key, p, name);
+
+        console.log(`✅ PRICE ${key}: ${p} | source=${name}`);
+        return p;
+
+      } catch (err) {
+        lastError = err;
+        providerFailure(name, err);
+
+        if (name !== 'TwelveData') {
+          recordProvider(name, false, err);
+        }
+
+        console.log(
+          `⚠️ ${name} price failed ${key}:`,
+          err.response?.status || err.message
+        );
+      }
+    }
+
+    const stale = stalePrice(key);
+    if (stale) {
+      console.log(
+        `🟡 PRICE FALLBACK CACHE ${key}: ${stale.price} | age=${Math.round((Date.now()-stale.time)/1000)}s`
+      );
+      return stale.price;
+    }
+
+    throw lastError || new Error(`All price providers failed for ${key}`);
+  })();
+
+  priceRequests.set(key, promise);
+
+  try {
+    return await promise;
+  } finally {
+    priceRequests.delete(key);
+  }
+}
+
+function normalizeCandles(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows.map(r => ({
+    open: Number(r.open),
+    high: Number(r.high),
+    low: Number(r.low),
+    close: Number(r.close),
+    timestamp: r.timestamp ?? r.datetime ?? null
+  })).filter(r =>
+    Number.isFinite(r.open) &&
+    Number.isFinite(r.high) &&
+    Number.isFinite(r.low) &&
+    Number.isFinite(r.close)
+  );
+}
+
+async function candlesFromTwelve(pair, interval) {
+  const { data } = await twelveRequest(
+    'https://api.twelvedata.com/time_series',
+    {
+      params: {
+        symbol: formatTwelveSymbol(pair),
+        interval,
+        outputsize: 50,
+        apikey: config.twelveDataKey
+      },
+      timeout: PROVIDER_TIMEOUT_MS
+    },
+    `candles ${pair} ${interval}`,
+    interval === '5min' ? 20 : 10
+  );
+
+  if (!Array.isArray(data?.values)) {
+    throw new Error(data?.message || `No TwelveData candles for ${pair} ${interval}`);
+  }
+
+  const out = normalizeCandles(
+    data.values.slice().reverse().map(r => ({
+      open: r.open, high: r.high, low: r.low,
+      close: r.close, datetime: r.datetime
+    }))
+  );
+
+  if (out.length < 20) throw new Error(`Insufficient TwelveData candles for ${pair} ${interval}`);
+  return out;
+}
+
+function binanceInterval(interval) {
+  return ({
+    '1min':'1m','5min':'5m','15min':'15m',
+    '30min':'30m','1h':'1h','2h':'2h','4h':'4h'
+  })[interval] || null;
+}
+
+async function candlesFromBinance(pair, interval) {
+  if (pair !== 'BTCUSD') throw new Error('Binance candles only for BTCUSD');
+  const i = binanceInterval(interval);
+  if (!i) throw new Error(`Unsupported Binance interval: ${interval}`);
+
+  const { data } = await axios.get(
+    'https://api.binance.com/api/v3/klines',
+    {
+      params: { symbol: 'BTCUSDT', interval: i, limit: 50 },
+      timeout: PROVIDER_TIMEOUT_MS
+    }
+  );
+
+  const out = normalizeCandles(
+    data.map(r => ({
+      timestamp: r[0],
+      open: r[1], high: r[2], low: r[3], close: r[4]
+    }))
+  );
+
+  if (out.length < 20) throw new Error('Insufficient Binance candles');
+  recordProvider('Binance', true);
+  return out;
+}
+
+function alphaInterval(interval) {
+  return ({
+    '1min':'1min','5min':'5min','15min':'15min',
+    '30min':'30min','1h':'60min'
+  })[interval] || null;
+}
+
+async function candlesFromAlphaForex(pair, interval) {
+  if (pair === 'BTCUSD' || pair === 'XAUUSD') {
+    throw new Error('Alpha intraday candle fallback disabled for this asset');
+  }
+
+  const key = alphaKey();
+  if (!key) throw new Error('Alpha Vantage API key not configured');
+
+  const i = alphaInterval(interval);
+  if (!i) throw new Error(`Unsupported Alpha interval: ${interval}`);
+
+  const { data } = await axios.get(
+    'https://www.alphavantage.co/query',
+    {
+      params: {
+        function: 'FX_INTRADAY',
+        from_symbol: pair.slice(0,3),
+        to_symbol: pair.slice(3,6),
+        interval: i,
+        outputsize: 'compact',
+        apikey: key
+      },
+      timeout: PROVIDER_TIMEOUT_MS
+    }
+  );
+
+  const seriesKey = Object.keys(data || {}).find(k => k.startsWith('Time Series FX'));
+  if (!seriesKey) {
+    throw new Error(data?.Information || data?.Note || `No Alpha FX candles for ${pair}`);
+  }
+
+  const entries = Object.entries(data[seriesKey])
+    .sort(([a],[b]) => new Date(a) - new Date(b))
+    .slice(-50)
+    .map(([datetime,r]) => ({
+      datetime,
+      open: r['1. open'],
+      high: r['2. high'],
+      low: r['3. low'],
+      close: r['4. close']
+    }));
+
+  const out = normalizeCandles(entries);
+  if (out.length < 20) throw new Error(`Insufficient Alpha candles for ${pair}`);
+  recordProvider('AlphaVantage', true);
+  return out;
+}
+
+function candlePlan(pair) {
+  if (pair === 'BTCUSD') {
+    return [
+      ['Binance', candlesFromBinance],
+      ['TwelveData', candlesFromTwelve]
+    ];
+  }
+  if (pair === 'XAUUSD') {
+    return [['TwelveData', candlesFromTwelve]];
+  }
+  return [
+    ['TwelveData', candlesFromTwelve],
+    ['AlphaVantage', candlesFromAlphaForex]
+  ];
+}
+
+async function getCandles(pair, interval = '15min') {
+  const symbol = assertSupportedPair(pair);
+  const tf = String(interval || '15min');
+  const key = `${symbol}:${tf}`;
+
+  const cached = getCache(key);
+  if (cached) {
+    console.log('📦 Using candle cache:', key);
+    return cached;
+  }
+
+  if (candleRequests.has(key)) {
+    console.log('⏳ Shared candle request:', key);
+    return candleRequests.get(key);
+  }
+
+  const promise = (async () => {
+    let lastError = null;
+
+    for (const [name, fn] of candlePlan(symbol)) {
+      try {
+        console.log(`🌐 Candles provider ${name}: ${symbol} ${tf}`);
+        const candles = await fn(symbol, tf);
+        setCache(key, candles);
+        console.log(`✅ CANDLES ${symbol} ${tf}: ${candles.length} | source=${name}`);
+        return candles;
+      } catch (err) {
+        lastError = err;
+        if (name !== 'TwelveData') recordProvider(name, false, err);
+        console.log(
+          `⚠️ ${name} candles failed ${symbol} ${tf}:`,
+          err.response?.status || err.message
+        );
+      }
+    }
+
+    throw lastError || new Error(`All candle providers failed for ${symbol} ${tf}`);
+  })();
+
+  candleRequests.set(key, promise);
+
+  try {
+    return await promise;
+  } finally {
+    candleRequests.delete(key);
+  }
+}
+
+
+async function getSafeTradePrice(pair) {
+  const key = assertSupportedPair(pair);
+
+  const item = freshPrice(key);
+
+  if (item) {
+    return {
+      price: item.price,
+      provider: item.provider,
+      ageMs: Date.now() - item.time,
+      fresh: true
+    };
+  }
+
+  try {
+    const price = await getPrice(key);
+    const current = priceCache.get(key);
+
+    if (!current) {
+      return {
+        price,
+        provider: 'unknown',
+        ageMs: 0,
+        fresh: true
+      };
+    }
+
+    const ageMs = Date.now() - current.time;
+
+    return {
+      price,
+      provider: current.provider,
+      ageMs,
+      fresh: ageMs <= MAX_TRADE_PRICE_AGE_MS
+    };
+
+  } catch (error) {
+    const stale = stalePrice(key);
+
+    if (!stale) {
+      return {
+        price: null,
+        provider: null,
+        ageMs: null,
+        fresh: false,
+        error: error.message
+      };
+    }
+
+    const ageMs = Date.now() - stale.time;
+
+    return {
+      price:
+        ageMs <= MAX_TRADE_PRICE_AGE_MS
+          ? stale.price
+          : null,
+      provider: stale.provider,
+      ageMs,
+      fresh:
+        ageMs <= MAX_TRADE_PRICE_AGE_MS,
+      error: error.message
+    };
+  }
+}
+
+function getMarketDataHealth() {
+  const providers = {};
+  for (const [name,state] of providerHealth.entries()) {
+    providers[name] = {
+      ...state,
+      lastSuccessAgoSec: state.lastSuccessAt
+        ? Math.round((Date.now()-state.lastSuccessAt)/1000) : null,
+      lastFailureAgoSec: state.lastFailureAt
+        ? Math.round((Date.now()-state.lastFailureAt)/1000) : null
+    };
+  }
+
+  return {
+    queueLength: requestQueue.length,
+    queueRunning,
+    cooldownActive: twelveCooldownUntil > Date.now(),
+    cooldownRemainingMs: Math.max(0, twelveCooldownUntil - Date.now()),
+    candleRequests: candleRequests.size,
+    priceRequests: priceRequests.size,
+    minRequestGap: TWELVE_MIN_REQUEST_GAP_MS,
+    providers,
+    configured: {
+      twelveData: Boolean(config.twelveDataKey),
+      eodhd: Boolean(config.eodhdApiKey),
+      alphaVantage: Boolean(alphaKey()),
+      binance: true,
+      coinGecko: true,
+      metalsApi: Boolean(metalsApiKey())
+    },
+
+    circuits: Object.fromEntries(
+      [...providerCircuit.entries()].map(
+        ([name, state]) => [
+          name,
+          {
+            failures: state.failures,
+            blocked:
+              Boolean(
+                state.blockedUntil &&
+                state.blockedUntil > Date.now()
+              ),
+            cooldownRemainingMs:
+              Math.max(
+                0,
+                (state.blockedUntil || 0) -
+                Date.now()
+              )
+          }
+        ]
+      )
+    )
+  };
+}
+
+module.exports = {
+  getCandles,
+  getPrice,
+  getSafeTradePrice,
+  getMarketDataHealth
+};

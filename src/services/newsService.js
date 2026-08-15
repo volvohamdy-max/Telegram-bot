@@ -9,6 +9,7 @@ const {
   eventHash,
   affectedPairs
 } = require('./newsCalendarGate');
+const { getInvestingFallback } = require('./investingFallback');
 
 function recipients() {
   const out = new Set();
@@ -550,7 +551,57 @@ async function checkEconomicNews(bot) {
         );
       }
 
-      if (!hasValue(event.actual)) {
+      
+    // ==========================================
+    // INVESTING.COM FALLBACK
+    // Only used when primary providers still
+    // have no Actual after force refresh.
+    // ==========================================
+
+    if (!hasValue(event.actual)) {
+      try {
+        console.log(
+          `🌐 Trying Investing fallback: ${event.title}`
+        );
+
+        const investing =
+          await getInvestingFallback(event);
+
+        if (investing) {
+          event.actual =
+            investing.actual ?? event.actual;
+
+          event.forecast =
+            investing.forecast ?? event.forecast;
+
+          event.previous =
+            investing.previous ?? event.previous;
+
+          if (hasValue(event.actual)) {
+            console.log(
+              `🟢 Investing fallback matched: ${event.title} | Actual=${event.actual}`
+            );
+          } else {
+            console.log(
+              `🟡 Investing matched but Actual still missing: ${event.title}`
+            );
+          }
+        } else {
+          console.log(
+            `🟡 Investing fallback no match: ${event.title}`
+          );
+        }
+
+      } catch (error) {
+        console.log(
+          '⚠️ Investing fallback error:',
+          error.response?.status || '',
+          error.message
+        );
+      }
+    }
+
+if (!hasValue(event.actual)) {
         console.log(
           `⏳ Actual still unavailable, release deferred: ${event.title}`
         );

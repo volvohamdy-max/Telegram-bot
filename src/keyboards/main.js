@@ -1,16 +1,29 @@
 const { Markup } = require('telegraf');
 const { tByLang } = require('../utils/i18n');
 
-const mainKeyboard = (language = 'ar', isAdmin = false) => {
+const mainKeyboard = (
+  language = 'ar',
+  isAdmin = false,
+  isVip = false
+) => {
   const { buttons } = tByLang(language);
 
   const rows = [
+    [
+      language === 'en'
+        ? '🥇 Check Your Trade'
+        : '🥇 اختبر صفقتك'
+    ],
+    [
+      language === 'en'
+        ? '🤖 Monitor My Trade'
+        : '🤖 راقب صفقتي'
+    ],
     [buttons.tradeNow, buttons.bestOpportunity],
     [buttons.marketCenter, buttons.alertsCenter],
     [buttons.accountCenter, buttons.more]
   ];
-
-  if (isAdmin) {
+if (isAdmin) {
     rows.push(['🎛️ لوحة الأدمن']);
   }
 

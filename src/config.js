@@ -21,4 +21,6 @@ eodhdApiKey: process.env.EODHD_API_KEY || '',
 finnhubKey: process.env.FINNHUB_API_KEY || '',
 mainGroupId: process.env.MAIN_GROUP_ID,
 mainGroupLink: process.env.MAIN_GROUP_LINK,
+alphaVantageKey: process.env.ALPHA_VANTAGE_API_KEY || '',
+vipChannelId: process.env.VIP_CHANNEL_ID,
 };

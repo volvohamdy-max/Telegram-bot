@@ -1039,6 +1039,28 @@ ${sentGroup
     );
   });
 
+  bot.action('adminv21_toggle_free_limit', async (ctx) => {
+    if (!requireAdmin(ctx)) return;
+
+    const enabled =
+      toggleSetting(
+        'free_daily_limit_enabled',
+        false
+      );
+
+    console.log(
+      `🎟️ Free Daily Limit: ${enabled ? 'ON' : 'OFF'}`
+    );
+
+    return replyOrEdit(
+      ctx,
+      controlsText(),
+      controlsV21Keyboard(
+        currentSettings()
+      )
+    );
+  });
+
   bot.action('adminv21_toggle_breaking', async (ctx) => {
     if (!requireAdmin(ctx)) return;
     toggleSetting('breaking_news_enabled', true);

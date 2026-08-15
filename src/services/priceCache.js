@@ -14,7 +14,7 @@ function getCachedPrice(pair) {
         return null;
     }
 
-    const CACHE_TIME = 5 * 60 * 1000; // 5 دقائق
+    const CACHE_TIME = 30 * 1000; // 30 seconds - Trade Monitor
 
     if (Date.now() - item.time > CACHE_TIME) {
         delete cache[pair];

@@ -72,6 +72,30 @@ function initDatabase() {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS copilot_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id TEXT NOT NULL,
+      pair TEXT NOT NULL DEFAULT 'XAUUSD',
+      action TEXT NOT NULL,
+      entry REAL NOT NULL,
+      stop_loss REAL,
+      target1 REAL,
+      target2 REAL,
+
+      status TEXT NOT NULL DEFAULT 'watching',
+      health_status TEXT NOT NULL DEFAULT 'NEW',
+      last_price REAL,
+      last_score INTEGER,
+      last_reason TEXT,
+
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_copilot_user_status
+      ON copilot_trades (telegram_id, status);
+
+
     CREATE TABLE IF NOT EXISTS news_alerts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       news_id TEXT UNIQUE,

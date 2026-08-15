@@ -15,7 +15,6 @@ const { registerAdminV21 } = require('./admin/adminControlCenterV21');
 const { getBoolSetting: getAdminBoolSetting } = require('./database/adminControl');
 const startScheduler = require('./services/scheduler');
 const { startBreakingNews } = require('./services/breakingNewsService');
-const { startAutoTrendHunter } = require('./services/trendHunterAuto');
 const languageRouter = require('./utils/languageRouter');
 
 async function main() {
@@ -88,7 +87,6 @@ async function main() {
 
   startScheduler(bot);
   startBreakingNews(bot);
-  startAutoTrendHunter(bot);
   console.log('Scheduler started.');
 
   try {

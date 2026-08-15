@@ -9,25 +9,53 @@ const STATE = {
 
 const CONFIG = {
   pair: 'XAUUSD',
-  minAiA: 58,
-  minAiAPlus: 65,
-  minScoreA: 70,
-  minScoreAPlus: 80,
-  cooldownMs: 20 * 60 * 1000,
-  reverseCooldownMs: 10 * 60 * 1000
+
+  // Active, but not reckless.
+  minScoreStrict: 65,
+  minScoreEarly: 72,
+  minScoreBreakout: 68,
+
+  minAiStrong: 60,
+  minAiSupport: 54,
+
+  cooldownMs: 10 * 60 * 1000,
+  reverseCooldownMs: 5 * 60 * 1000,
+
+  baseLateAtr: 1.25,
+  strongLateAtr: 1.55,
+  eliteLateAtr: 1.80,
+  breakoutLateAtr: 2.20,
+
+  slAtrMultiplier: 1.20,
+  minRiskUsd: 3.0,
+  maxRiskAtr: 2.20,
+  maxRiskUsd: 8.5,
+
+  tp1R: 1.20,
+  tp2R: 2.00
 };
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
+function finite(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function ema(values, period) {
   if (!Array.isArray(values) || values.length < period) return null;
+
   const k = 2 / (period + 1);
-  let value = values[0];
+  let value = Number(values[0]);
+
+  if (!Number.isFinite(value)) return null;
 
   for (let i = 1; i < values.length; i++) {
-    value = values[i] * k + value * (1 - k);
+    const n = Number(values[i]);
+    if (!Number.isFinite(n)) continue;
+    value = n * k + value * (1 - k);
   }
 
   return value;
@@ -40,15 +68,28 @@ function rsi(values, period = 14) {
   let losses = 0;
 
   for (let i = values.length - period; i < values.length; i++) {
-    const diff = values[i] - values[i - 1];
+    const current = Number(values[i]);
+    const previous = Number(values[i - 1]);
+
+    if (!Number.isFinite(current) || !Number.isFinite(previous)) {
+      return null;
+    }
+
+    const diff = current - previous;
+
     if (diff >= 0) gains += diff;
     else losses += Math.abs(diff);
   }
 
   if (losses === 0) return 100;
 
-  const rs = (gains / period) / (losses / period);
-  return 100 - (100 / (1 + rs));
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+
+  if (avgLoss === 0) return 100;
+
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
 }
 
 function atr(candles, period = 14) {
@@ -58,18 +99,11 @@ function atr(candles, period = 14) {
   const ranges = [];
 
   for (let i = 1; i < sample.length; i++) {
-    const current = sample[i];
-    const prev = sample[i - 1];
+    const high = finite(sample[i].high);
+    const low = finite(sample[i].low);
+    const prevClose = finite(sample[i - 1].close);
 
-    const high = Number(current.high);
-    const low = Number(current.low);
-    const prevClose = Number(prev.close);
-
-    if (
-      !Number.isFinite(high) ||
-      !Number.isFinite(low) ||
-      !Number.isFinite(prevClose)
-    ) continue;
+    if (high == null || low == null || prevClose == null) continue;
 
     ranges.push(
       Math.max(
@@ -81,27 +115,170 @@ function atr(candles, period = 14) {
   }
 
   if (!ranges.length) return null;
+
   return ranges.reduce((a, b) => a + b, 0) / ranges.length;
 }
 
-function recentMomentum(closes) {
-  if (!Array.isArray(closes) || closes.length < 5) {
-    return { direction: 'WAIT', strength: 0 };
+
+function adx(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period * 2 + 1) {
+    return null;
   }
 
-  const recent = closes.slice(-4);
+  const rows = candles.slice(-(period * 2 + 1));
+
+  const tr = [];
+  const plusDM = [];
+  const minusDM = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const high = finite(rows[i].high);
+    const low = finite(rows[i].low);
+    const prevHigh = finite(rows[i - 1].high);
+    const prevLow = finite(rows[i - 1].low);
+    const prevClose = finite(rows[i - 1].close);
+
+    if (
+      high == null ||
+      low == null ||
+      prevHigh == null ||
+      prevLow == null ||
+      prevClose == null
+    ) {
+      return null;
+    }
+
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+
+    plusDM.push(
+      upMove > downMove && upMove > 0 ? upMove : 0
+    );
+
+    minusDM.push(
+      downMove > upMove && downMove > 0 ? downMove : 0
+    );
+
+    tr.push(
+      Math.max(
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose)
+      )
+    );
+  }
+
+  const dxValues = [];
+
+  for (let end = period; end <= tr.length; end++) {
+    const start = end - period;
+
+    const trSum = tr.slice(start, end)
+      .reduce((a, b) => a + b, 0);
+
+    if (trSum <= 0) continue;
+
+    const plusSum = plusDM.slice(start, end)
+      .reduce((a, b) => a + b, 0);
+
+    const minusSum = minusDM.slice(start, end)
+      .reduce((a, b) => a + b, 0);
+
+    const plusDI = 100 * plusSum / trSum;
+    const minusDI = 100 * minusSum / trSum;
+
+    const total = plusDI + minusDI;
+
+    if (total <= 0) continue;
+
+    dxValues.push(
+      100 * Math.abs(plusDI - minusDI) / total
+    );
+  }
+
+  if (!dxValues.length) return null;
+
+  return dxValues.slice(-period)
+    .reduce((a, b) => a + b, 0) /
+    Math.min(period, dxValues.length);
+}
+
+
+function vwap(candles, lookback = 24) {
+  if (!Array.isArray(candles) || !candles.length) {
+    return null;
+  }
+
+  const rows = candles.slice(-lookback);
+
+  let totalPV = 0;
+  let totalVolume = 0;
+
+  for (const candle of rows) {
+    const high = finite(candle.high);
+    const low = finite(candle.low);
+    const close = finite(candle.close);
+    const volume = finite(candle.volume);
+
+    if (
+      high == null ||
+      low == null ||
+      close == null ||
+      volume == null ||
+      volume <= 0
+    ) {
+      continue;
+    }
+
+    const typicalPrice =
+      (high + low + close) / 3;
+
+    totalPV += typicalPrice * volume;
+    totalVolume += volume;
+  }
+
+  if (totalVolume <= 0) {
+    return null;
+  }
+
+  return totalPV / totalVolume;
+}
+
+function recentMomentum(closes) {
+  if (!Array.isArray(closes) || closes.length < 6) {
+    return { direction: 'WAIT', strength: 0, impulse: 0 };
+  }
+
+  const recent = closes.slice(-5);
   let up = 0;
   let down = 0;
+  let impulse = 0;
 
   for (let i = 1; i < recent.length; i++) {
-    if (recent[i] > recent[i - 1]) up++;
-    else if (recent[i] < recent[i - 1]) down++;
+    const diff = recent[i] - recent[i - 1];
+    impulse += diff;
+
+    if (diff > 0) up++;
+    else if (diff < 0) down++;
   }
 
-  if (up >= 2) return { direction: 'BUY', strength: up };
-  if (down >= 2) return { direction: 'SELL', strength: down };
+  if (up >= 3) {
+    return { direction: 'BUY', strength: up, impulse };
+  }
 
-  return { direction: 'WAIT', strength: Math.max(up, down) };
+  if (down >= 3) {
+    return { direction: 'SELL', strength: down, impulse };
+  }
+
+  if (up > down) {
+    return { direction: 'BUY', strength: up, impulse };
+  }
+
+  if (down > up) {
+    return { direction: 'SELL', strength: down, impulse };
+  }
+
+  return { direction: 'WAIT', strength: Math.max(up, down), impulse };
 }
 
 function get15mTrend(analysis) {
@@ -114,15 +291,45 @@ function get15mTrend(analysis) {
     return analysis.technicalDirection;
   }
 
-  const ema20 = Number(analysis.indicators?.ema20);
-  const ema50 = Number(analysis.indicators?.ema50);
+  const ema20 = finite(analysis.indicators?.ema20);
+  const ema50 = finite(analysis.indicators?.ema50);
 
-  if (Number.isFinite(ema20) && Number.isFinite(ema50)) {
+  if (ema20 != null && ema50 != null) {
     if (ema20 > ema50) return 'BUY';
     if (ema20 < ema50) return 'SELL';
   }
 
   return 'WAIT';
+}
+
+function previousRange(candles, count = 6) {
+  const rows = candles.slice(-(count + 1), -1);
+
+  if (!rows.length) {
+    return { high: null, low: null };
+  }
+
+  const highs = rows.map(c => finite(c.high)).filter(v => v != null);
+  const lows = rows.map(c => finite(c.low)).filter(v => v != null);
+
+  return {
+    high: highs.length ? Math.max(...highs) : null,
+    low: lows.length ? Math.min(...lows) : null
+  };
+}
+
+function recentSwing(candles, direction, lookback = 12) {
+  const rows = candles.slice(-lookback);
+
+  if (!rows.length) return null;
+
+  if (direction === 'BUY') {
+    const lows = rows.map(c => finite(c.low)).filter(v => v != null);
+    return lows.length ? Math.min(...lows) : null;
+  }
+
+  const highs = rows.map(c => finite(c.high)).filter(v => v != null);
+  return highs.length ? Math.max(...highs) : null;
 }
 
 function calculateScalpScore({
@@ -132,71 +339,134 @@ function calculateScalpScore({
   ema20,
   rsi5,
   momentum,
+  aiDirection,
   aiConfidence,
   atr5,
-  entry
+  adx5,
+  vwap5,
+  entry,
+  entryMode,
+  breakoutValid,
+  pullbackHealthy
 }) {
   let score = 0;
   const reasons = [];
 
   if (direction === trend15) {
-    score += 20;
+    score += 22;
     reasons.push('15M trend aligned');
   }
 
-  if (
-    Number.isFinite(ema9) &&
-    Number.isFinite(ema20)
-  ) {
-    const emaAligned =
+  if (ema9 != null && ema20 != null) {
+    const aligned =
       (direction === 'BUY' && ema9 > ema20) ||
       (direction === 'SELL' && ema9 < ema20);
 
-    if (emaAligned) {
-      score += 25;
+    if (aligned) {
+      score += 22;
       reasons.push('5M EMA aligned');
     }
   }
 
   if (momentum.direction === direction) {
-    score += momentum.strength >= 4 ? 20 : 15;
+    const pts = momentum.strength >= 3 ? 18 : 12;
+    score += pts;
     reasons.push('5M momentum aligned');
   }
 
-  if (Number.isFinite(rsi5)) {
+  if (rsi5 != null) {
     if (
       direction === 'BUY' &&
-      rsi5 >= 52 &&
+      rsi5 >= 50 &&
       rsi5 <= 70
     ) {
       score += 10;
       reasons.push('RSI healthy');
     } else if (
       direction === 'SELL' &&
-      rsi5 <= 48 &&
-      rsi5 >= 32
+      rsi5 <= 50 &&
+      rsi5 >= 30
     ) {
       score += 10;
       reasons.push('RSI healthy');
     } else if (
       direction === 'BUY' &&
-      rsi5 > 50 &&
-      rsi5 < 72
+      rsi5 > 70
     ) {
-      score += 6;
+      score -= 8;
+      reasons.push('RSI stretched');
     } else if (
       direction === 'SELL' &&
-      rsi5 < 50 &&
-      rsi5 > 28
+      rsi5 < 30
     ) {
-      score += 6;
+      score -= 8;
+      reasons.push('RSI stretched');
     }
   }
 
-  if (Number.isFinite(atr5) && Number.isFinite(entry) && atr5 > 0) {
+  // VWAP direction confirmation.
+  // Uses real volume when the candle provider supplies it.
+  if (
+    vwap5 != null &&
+    entry != null
+  ) {
+    const distanceFromVwap =
+      Math.abs(entry - vwap5);
+
+    const neutralBand =
+      atr5 != null && atr5 > 0
+        ? atr5 * 0.08
+        : 0;
+
+    if (
+      neutralBand > 0 &&
+      distanceFromVwap <= neutralBand
+    ) {
+      score += 2;
+      reasons.push('Price near VWAP');
+
+    } else {
+      const vwapAligned =
+        (
+          direction === 'BUY' &&
+          entry > vwap5
+        ) ||
+        (
+          direction === 'SELL' &&
+          entry < vwap5
+        );
+
+      if (vwapAligned) {
+        score += 8;
+        reasons.push('VWAP confirms direction');
+      } else {
+        score -= 6;
+        reasons.push('VWAP opposes direction');
+      }
+    }
+  }
+
+  // ADX trend-strength filter for 5M scalping.
+  if (adx5 != null) {
+    if (adx5 >= 30) {
+      score += 10;
+      reasons.push('ADX strong trend');
+    } else if (adx5 >= 25) {
+      score += 7;
+      reasons.push('ADX healthy trend');
+    } else if (adx5 >= 20) {
+      score += 3;
+      reasons.push('ADX moderate trend');
+    } else if (adx5 < 16) {
+      score -= 8;
+      reasons.push('ADX weak/choppy market');
+    }
+  }
+
+  if (atr5 != null && entry != null && atr5 > 0) {
     const atrPct = (atr5 / entry) * 100;
 
-    if (atrPct >= 0.035 && atrPct <= 0.30) {
+    if (atrPct >= 0.035 && atrPct <= 0.35) {
       score += 10;
       reasons.push('5M volatility usable');
     } else if (atrPct > 0.015) {
@@ -204,11 +474,33 @@ function calculateScalpScore({
     }
   }
 
-  if (Number.isFinite(aiConfidence)) {
-    if (aiConfidence >= 70) score += 15;
-    else if (aiConfidence >= 65) score += 12;
-    else if (aiConfidence >= 58) score += 8;
-    else if (aiConfidence >= 54) score += 3;
+  if (entryMode === 'BREAKOUT' && breakoutValid) {
+    score += 12;
+    reasons.push('Confirmed 5M breakout');
+  }
+
+  if (pullbackHealthy) {
+    score += 8;
+    reasons.push('Healthy EMA pullback');
+  }
+
+  if (aiDirection === direction) {
+    if (aiConfidence >= 70) score += 14;
+    else if (aiConfidence >= 60) score += 10;
+    else if (aiConfidence >= 54) score += 5;
+
+    if (aiConfidence >= 54) {
+      reasons.push('AI confirms direction');
+    }
+  }
+
+  if (
+    aiDirection &&
+    aiDirection !== direction &&
+    aiConfidence >= CONFIG.minAiStrong
+  ) {
+    score -= 25;
+    reasons.push('Strong AI disagreement');
   }
 
   return {
@@ -225,6 +517,7 @@ function cooldownAllows(direction, entry, atr5) {
   }
 
   const elapsed = now - STATE.lastSentAt;
+
   const reversing =
     STATE.lastDirection &&
     STATE.lastDirection !== direction;
@@ -262,15 +555,105 @@ function markSent(direction, entry, atr5) {
     Math.round(Number(entry) / bucketSize);
 }
 
+function buildSmartLevels({
+  direction,
+  entry,
+  atr5,
+  candles5
+}) {
+  const baseRisk =
+    Math.max(
+      (Number(atr5) || 2) * CONFIG.slAtrMultiplier,
+      CONFIG.minRiskUsd
+    );
+
+  let risk = baseRisk;
+
+  const swing = recentSwing(
+    candles5,
+    direction,
+    12
+  );
+
+  const safetyMargin =
+    Math.max(
+      (Number(atr5) || 2) * 0.15,
+      0.5
+    );
+
+  if (Number.isFinite(swing)) {
+    const swingRisk =
+      direction === 'BUY'
+        ? entry - swing + safetyMargin
+        : swing - entry + safetyMargin;
+
+    if (swingRisk > 0) {
+      risk = Math.max(risk, swingRisk);
+    }
+  }
+
+  const maxRisk =
+    Math.max(
+      (Number(atr5) || 2) * CONFIG.maxRiskAtr,
+      CONFIG.maxRiskUsd
+    );
+
+  risk = Math.min(risk, maxRisk);
+
+  const stopLoss =
+    direction === 'BUY'
+      ? entry - risk
+      : entry + risk;
+
+  const tp1 =
+    direction === 'BUY'
+      ? entry + risk * CONFIG.tp1R
+      : entry - risk * CONFIG.tp1R;
+
+  const tp2 =
+    direction === 'BUY'
+      ? entry + risk * CONFIG.tp2R
+      : entry - risk * CONFIG.tp2R;
+
+  return {
+    risk,
+    stopLoss,
+    tp1,
+    tp2,
+    rrTp1: CONFIG.tp1R,
+    rrTp2: CONFIG.tp2R
+  };
+}
+
 async function scanGoldScalp() {
   const pair = CONFIG.pair;
 
-  const [analysis15, candles5] = await Promise.all([
+  const [
+    analysis15,
+    candles5,
+    candles15
+  ] = await Promise.all([
     analyzePair(pair),
-    getCandles(pair, '5min')
+    getCandles(pair, '5min'),
+
+    // Dedicated 15M candles let the Gold Scalper
+    // calculate trend using CLOSED candles only.
+    getCandles(pair, '15min')
+      .catch(error => {
+        console.log(
+          '⚠️ Gold Scalper 15M candle fallback:',
+          error.message
+        );
+
+        return null;
+      })
   ]);
 
-  if (!analysis15 || !Array.isArray(candles5) || candles5.length < 25) {
+  if (
+    !analysis15 ||
+    !Array.isArray(candles5) ||
+    candles5.length < 25
+  ) {
     return {
       ready: false,
       status: 'NO_DATA',
@@ -278,9 +661,16 @@ async function scanGoldScalp() {
     };
   }
 
-  const closes = candles5
-    .map(c => Number(c.close))
-    .filter(Number.isFinite);
+  // Last bar can still be forming.
+  // Indicators use CLOSED candles only.
+  const closedCandles5 =
+    candles5.length > 1
+      ? candles5.slice(0, -1)
+      : candles5;
+
+  const closes = closedCandles5
+    .map(c => finite(c.close))
+    .filter(v => v != null);
 
   if (closes.length < 25) {
     return {
@@ -290,57 +680,160 @@ async function scanGoldScalp() {
     };
   }
 
-  const entry = closes[closes.length - 1];
-  const ema9 = ema(closes.slice(-30), 9);
-  const ema20 = ema(closes.slice(-35), 20);
-  const rsi5 = rsi(closes, 14);
-  const atr5 = atr(candles5, 14);
-  const momentum = recentMomentum(closes);
-  const trend15 = get15mTrend(analysis15);
+  // Entry remains close to the current market:
+  // use the latest raw candle close.
+  const liveClose =
+    finite(
+      candles5[
+        candles5.length - 1
+      ]?.close
+    );
+
+  const entry =
+    liveClose != null
+      ? liveClose
+      : closes[closes.length - 1];
+
+  const ema9 =
+    ema(closes.slice(-35), 9);
+
+  const ema20 =
+    ema(closes.slice(-40), 20);
+
+  const rsi5 =
+    rsi(closes, 14);
+
+  const atr5 =
+    atr(closedCandles5, 14);
+
+  const adx5 =
+    adx(closedCandles5, 14);
+
+  const vwap5 =
+    vwap(closedCandles5, 24);
+
+  const momentum =
+    recentMomentum(closes);
+
+  // Default fallback remains the existing analysis.
+  let trend15 =
+    get15mTrend(analysis15);
+
+  // Prefer a CLOSED-candle 15M trend whenever available.
+  if (
+    Array.isArray(candles15) &&
+    candles15.length >= 52
+  ) {
+    const closedCandles15 =
+      candles15.slice(0, -1);
+
+    const closes15 =
+      closedCandles15
+        .map(c => finite(c.close))
+        .filter(v => v != null);
+
+    if (closes15.length >= 50) {
+      const ema20_15 =
+        ema(closes15.slice(-60), 20);
+
+      const ema50_15 =
+        ema(closes15.slice(-80), 50);
+
+      if (
+        ema20_15 != null &&
+        ema50_15 != null
+      ) {
+        if (ema20_15 > ema50_15) {
+          trend15 = 'BUY';
+        } else if (ema20_15 < ema50_15) {
+          trend15 = 'SELL';
+        }
+      }
+    }
+  }
+
+  const range =
+    previousRange(
+      closedCandles5,
+      6
+    );
+
+  if (
+    entry == null ||
+    ema9 == null ||
+    ema20 == null ||
+    atr5 == null ||
+    atr5 <= 0
+  ) {
+    return {
+      ready: false,
+      status: 'INDICATORS_NOT_READY',
+      pair,
+      trend15,
+      rsi5,
+      atr5
+    };
+  }
 
   let direction = 'WAIT';
   let entryMode = 'NONE';
 
-  // ==========================================
-  // STRICT ENTRY
-  // ==========================================
+  const emaBuy = ema9 > ema20;
+  const emaSell = ema9 < ema20;
 
-  if (
-    ema9 > ema20 &&
+  const breakoutBuy =
+    trend15 === 'BUY' &&
+    range.high != null &&
+    entry > range.high &&
+    entry - range.high <= atr5 * 0.55 &&
+    emaBuy &&
+    momentum.direction === 'BUY' &&
+    rsi5 != null &&
+    rsi5 >= 53 &&
+    rsi5 <= 78;
+
+  const breakoutSell =
+    trend15 === 'SELL' &&
+    range.low != null &&
+    entry < range.low &&
+    range.low - entry <= atr5 * 0.55 &&
+    emaSell &&
+    momentum.direction === 'SELL' &&
+    rsi5 != null &&
+    rsi5 <= 47 &&
+    rsi5 >= 22;
+
+  if (breakoutBuy) {
+    direction = 'BUY';
+    entryMode = 'BREAKOUT';
+  } else if (breakoutSell) {
+    direction = 'SELL';
+    entryMode = 'BREAKOUT';
+  } else if (
+    trend15 === 'BUY' &&
+    emaBuy &&
     momentum.direction === 'BUY'
   ) {
     direction = 'BUY';
     entryMode = 'STRICT';
   } else if (
-    ema9 < ema20 &&
+    trend15 === 'SELL' &&
+    emaSell &&
     momentum.direction === 'SELL'
   ) {
     direction = 'SELL';
     entryMode = 'STRICT';
-  } else if (
-    trend15 === momentum.direction &&
-    trend15 !== 'WAIT'
-  ) {
-    direction = trend15;
-    entryMode = 'STRICT';
   }
 
-  // ==========================================
-  // EARLY ENTRY
-  // ==========================================
-
+  // Early entry: only in the 15M trend direction.
   if (
     direction === 'WAIT' &&
     trend15 === 'BUY' &&
-    Number.isFinite(ema20) &&
     entry > ema20 &&
-    Number.isFinite(rsi5) &&
-    rsi5 >= 52 &&
-    rsi5 <= 68 &&
-    !(
-      momentum.direction === 'SELL' &&
-      momentum.strength >= 4
-    )
+    rsi5 != null &&
+    rsi5 >= 50 &&
+    rsi5 <= 67 &&
+    !(momentum.direction === 'SELL' && momentum.strength >= 3)
   ) {
     direction = 'BUY';
     entryMode = 'EARLY';
@@ -349,83 +842,14 @@ async function scanGoldScalp() {
   if (
     direction === 'WAIT' &&
     trend15 === 'SELL' &&
-    Number.isFinite(ema20) &&
     entry < ema20 &&
-    Number.isFinite(rsi5) &&
-    rsi5 <= 48 &&
-    rsi5 >= 32 &&
-    !(
-      momentum.direction === 'BUY' &&
-      momentum.strength >= 3
-    )
+    rsi5 != null &&
+    rsi5 <= 50 &&
+    rsi5 >= 33 &&
+    !(momentum.direction === 'BUY' && momentum.strength >= 3)
   ) {
     direction = 'SELL';
     entryMode = 'EARLY';
-  }
-
-  // ==========================================
-  // BREAKOUT ENTRY
-  // ==========================================
-
-  const previousCandles =
-    candles5.slice(-7, -1);
-
-  const previousHigh =
-    previousCandles.length
-      ? Math.max(
-          ...previousCandles
-            .map(c => Number(c.high))
-            .filter(Number.isFinite)
-        )
-      : null;
-
-  const previousLow =
-    previousCandles.length
-      ? Math.min(
-          ...previousCandles
-            .map(c => Number(c.low))
-            .filter(Number.isFinite)
-        )
-      : null;
-
-  let breakoutValid = false;
-
-  // BUY breakout
-  if (
-    trend15 === 'BUY' &&
-    Number.isFinite(previousHigh) &&
-    Number.isFinite(atr5) &&
-    entry > previousHigh &&
-    entry - previousHigh <= atr5 * 0.45 &&
-    ema9 > ema20 &&
-    momentum.direction === 'BUY' &&
-    momentum.strength >= 2 &&
-    Number.isFinite(rsi5) &&
-    rsi5 >= 55 &&
-    rsi5 <= 78
-  ) {
-    direction = 'BUY';
-    entryMode = 'BREAKOUT';
-    breakoutValid = true;
-  }
-
-  // SELL breakout
-  if (
-    trend15 === 'SELL' &&
-    Number.isFinite(previousLow) &&
-    Number.isFinite(atr5) &&
-    entry < previousLow &&
-    previousLow - entry <= atr5 * 0.45 &&
-    ema9 < ema20 &&
-    momentum.direction === 'SELL' &&
-    momentum.strength >= 2 &&
-    Number.isFinite(rsi5) &&
-    rsi5 <= 45 &&
-    rsi5 >= 22
-  ) {
-    direction = 'SELL';
-    entryMode = 'BREAKOUT';
-    breakoutValid = true;
   }
 
   if (direction === 'WAIT') {
@@ -436,11 +860,13 @@ async function scanGoldScalp() {
       trend15,
       rsi5,
       atr5,
+      adx5,
+      vwap5,
       ema9,
       ema20,
       momentum,
-      previousHigh,
-      previousLow
+      previousHigh: range.high,
+      previousLow: range.low
     };
   }
 
@@ -455,17 +881,32 @@ async function scanGoldScalp() {
       ? Number(analysis15.signal.confidence)
       : 0;
 
-  // AI is confirmation, not an absolute gate.
-  if (aiDirection && aiDirection !== direction) {
+  // Only strong AI disagreement blocks a technical setup.
+  if (
+    aiDirection &&
+    aiDirection !== direction &&
+    aiConfidence >= CONFIG.minAiStrong
+  ) {
     return {
       ready: false,
       status: 'AI_DIRECTION_MISMATCH',
       pair,
       direction,
       aiDirection,
-      aiConfidence
+      aiConfidence,
+      trend15,
+      entryMode
     };
   }
+
+  const distanceFromEma = Math.abs(entry - ema9);
+
+  const pullbackHealthy =
+    direction === 'BUY'
+      ? entry >= ema9 - atr5 * 0.20 &&
+        entry <= ema9 + atr5 * 0.65
+      : entry <= ema9 + atr5 * 0.20 &&
+        entry >= ema9 - atr5 * 0.65;
 
   const scored = calculateScalpScore({
     direction,
@@ -474,145 +915,107 @@ async function scanGoldScalp() {
     ema20,
     rsi5,
     momentum,
+    aiDirection,
     aiConfidence,
     atr5,
-    entry
+    adx5,
+    vwap5,
+    entry,
+    entryMode,
+    breakoutValid: breakoutBuy || breakoutSell,
+    pullbackHealthy
   });
 
-  // Early entries get a small setup bonus,
-  // but remain weaker than full STRICT confirmation.
-  if (entryMode === 'EARLY') {
-    scored.score = Math.min(
-      100,
-      scored.score + 12
-    );
-
-    scored.reasons.push(
-      'Early scalp setup'
-    );
-  }
+  let maxLateAtr = CONFIG.baseLateAtr;
 
   if (entryMode === 'BREAKOUT') {
-    scored.score = Math.min(
-      100,
-      scored.score + 15
-    );
-
-    scored.reasons.push(
-      'Confirmed 5M breakout'
-    );
+    maxLateAtr = CONFIG.breakoutLateAtr;
+  } else if (scored.score >= 85) {
+    maxLateAtr = CONFIG.eliteLateAtr;
+  } else if (scored.score >= 72) {
+    maxLateAtr = CONFIG.strongLateAtr;
   }
 
-  // Dynamic late-entry protection.
-  let maxLateAtr = 0.85;
-
-  // A confirmed breakout is allowed to travel farther
-  // from EMA than a normal pullback entry.
-  if (entryMode === 'BREAKOUT') {
-    maxLateAtr = 1.75;
-  }
-
-  if (entryMode !== 'BREAKOUT') {
-    if (scored.score >= 85) {
-      maxLateAtr = 1.35;
-    } else if (scored.score >= 70) {
-      maxLateAtr = 1.10;
-    }
-  }
-
-  const distanceFromEma = Math.abs(entry - ema9);
-
-  if (
-    Number.isFinite(atr5) &&
-    Number.isFinite(ema9) &&
-    distanceFromEma > atr5 * maxLateAtr
-  ) {
+  if (distanceFromEma > atr5 * maxLateAtr) {
     return {
       ready: false,
       status: 'LATE_ENTRY',
       pair,
       direction,
-      score: scored.score,
-      aiConfidence,
-      atr5,
-      entry,
-      distanceFromEma,
-      maxLateAtr
-    };
-  }
-
-  let grade = 'WATCH';
-  let ready = false;
-
-  // ==========================================
-  // AI CONFIRMED GRADES
-  // ==========================================
-
-  if (
-    scored.score >= CONFIG.minScoreAPlus &&
-    aiConfidence >= CONFIG.minAiAPlus
-  ) {
-    grade = 'A+';
-    ready = true;
-
-  } else if (
-    entryMode === 'BREAKOUT' &&
-    scored.score >= 90 &&
-    aiConfidence >= 55 &&
-    (!aiDirection || aiDirection === direction)
-  ) {
-    grade = 'BREAKOUT-A';
-    ready = true;
-
-    scored.reasons.push(
-      'Elite breakout confirmation'
-    );
-
-  } else if (
-    scored.score >= CONFIG.minScoreA &&
-    aiConfidence >= CONFIG.minAiA
-  ) {
-    grade = 'A';
-    ready = true;
-  }
-
-  // ==========================================
-  // TECHNICAL FALLBACK
-  // AI unavailable, but technical setup is elite
-  // ==========================================
-
-  if (
-    !ready &&
-    !aiDirection &&
-    aiConfidence === 0 &&
-    scored.score >= 80 &&
-    direction === trend15
-  ) {
-    grade = 'TECH-A';
-    ready = true;
-
-    scored.reasons.push(
-      'AI unavailable - technical fallback'
-    );
-  }
-
-  if (!ready) {
-    return {
-      ready: false,
-      status: 'WATCH',
-      pair,
-      direction,
-      grade,
+      entryMode,
       score: scored.score,
       aiConfidence,
       trend15,
       rsi5,
       atr5,
+      adx5,
+      vwap5,
+      entry,
+      distanceFromEma,
+      maxLateAtr,
       reasons: scored.reasons
     };
   }
 
-  const cooldown = cooldownAllows(direction, entry, atr5);
+  let minRequiredScore = CONFIG.minScoreStrict;
+
+  if (entryMode === 'EARLY') {
+    minRequiredScore = CONFIG.minScoreEarly;
+  } else if (entryMode === 'BREAKOUT') {
+    minRequiredScore = CONFIG.minScoreBreakout;
+  }
+
+  // Small technical bonus when AI is unavailable.
+  // AI is confirmation, not a mandatory gate.
+  if (!aiDirection && aiConfidence === 0 && direction === trend15) {
+    scored.score = clamp(scored.score + 5, 0, 100);
+    scored.reasons.push('Technical fallback - AI unavailable');
+  }
+
+  if (scored.score < minRequiredScore) {
+    return {
+      ready: false,
+      status: 'WATCH',
+      pair,
+      direction,
+      entryMode,
+      grade: 'WATCH',
+      score: scored.score,
+      minRequiredScore,
+      aiConfidence,
+      trend15,
+      rsi5,
+      atr5,
+      adx5,
+      vwap5,
+      ema9,
+      ema20,
+      momentum,
+      reasons: scored.reasons
+    };
+  }
+
+  let grade = 'B';
+
+  if (
+    scored.score >= 85 &&
+    aiDirection === direction &&
+    aiConfidence >= CONFIG.minAiSupport
+  ) {
+    grade = 'A+';
+  } else if (scored.score >= 75) {
+    grade = 'A';
+  } else if (entryMode === 'BREAKOUT') {
+    grade = 'BREAKOUT-B';
+  } else if (!aiDirection && aiConfidence === 0) {
+    grade = 'TECH-B';
+  }
+
+  const cooldown = cooldownAllows(
+    direction,
+    entry,
+    atr5
+  );
 
   if (!cooldown.allowed) {
     return {
@@ -620,72 +1023,65 @@ async function scanGoldScalp() {
       status: cooldown.reason,
       pair,
       direction,
+      entryMode,
       grade,
       score: scored.score,
-      aiConfidence
+      aiConfidence,
+      trend15,
+      atr5
     };
   }
 
-  const risk =
-    Math.max(
-      (Number(atr5) || 2) * 0.85,
-      1.8
-    );
-
-  const tp1Distance =
-    Math.max(
-      risk * 1.00,
-      1.8
-    );
-
-  const tp2Distance =
-    Math.max(
-      risk * 1.60,
-      2.8
-    );
+  const levels = buildSmartLevels({
+    direction,
+    entry,
+    atr5,
+    candles5
+  });
 
   const zoneHalf =
-    clamp(
-      (Number(atr5) || 2) * 0.18,
-      0.6,
-      2.0
+    Math.max(
+      0.35,
+      Math.min(atr5 * 0.20, 1.20)
     );
-
-  const stopLoss =
-    direction === 'BUY'
-      ? entry - risk
-      : entry + risk;
-
-  const tp1 =
-    direction === 'BUY'
-      ? entry + tp1Distance
-      : entry - tp1Distance;
-
-  const tp2 =
-    direction === 'BUY'
-      ? entry + tp2Distance
-      : entry - tp2Distance;
 
   return {
     ready: true,
     status: 'ENTRY_READY',
     pair,
     direction,
+    entryMode,
     grade,
     score: scored.score,
     aiConfidence,
+    aiDirection,
     trend15,
     rsi5,
     atr5,
-    entryMode,
+    ema9,
+    ema20,
+    momentum,
+
     entry,
     entryFrom: entry - zoneHalf,
     entryTo: entry + zoneHalf,
-    stopLoss,
-    tp1,
-    tp2,
+
+    stopLoss: levels.stopLoss,
+    tp1: levels.tp1,
+    tp2: levels.tp2,
+    risk: levels.risk,
+    rrTp1: levels.rrTp1,
+    rrTp2: levels.rrTp2,
+
+    previousHigh: range.high,
+    previousLow: range.low,
+    distanceFromEma,
+    maxLateAtr,
+
     reasons: scored.reasons,
-    markSent: () => markSent(direction, entry, atr5)
+
+    markSent: () =>
+      markSent(direction, entry, atr5)
   };
 }
 
@@ -697,8 +1093,13 @@ async function buildGoldScalpResult() {
       `🟡 GOLD SCALPER WAIT: ${scalp.status}`,
       {
         direction: scalp.direction,
+        mode: scalp.entryMode,
         score: scalp.score,
-        ai: scalp.aiConfidence
+        min: scalp.minRequiredScore,
+        ai: scalp.aiConfidence,
+        atr: scalp.atr5,
+        late: scalp.distanceFromEma,
+        maxLateAtr: scalp.maxLateAtr
       }
     );
 
@@ -706,7 +1107,10 @@ async function buildGoldScalpResult() {
       pair: 'XAUUSD',
       signal: null,
       indicators: {
-        atr: scalp.atr5 || null
+        atr: scalp.atr5 || null,
+        rsi: scalp.rsi5 || null,
+        adx: scalp.adx5 || null,
+        vwap: scalp.vwap5 || null
       },
       scalpMeta: scalp
     };
@@ -715,17 +1119,20 @@ async function buildGoldScalpResult() {
   console.log(
     `⚡ GOLD SCALP ${scalp.grade}: ${scalp.direction}`,
     {
+      mode: scalp.entryMode,
       score: scalp.score,
       ai: scalp.aiConfidence,
       entry: scalp.entry,
+      sl: scalp.stopLoss,
       tp1: scalp.tp1,
       tp2: scalp.tp2,
-      sl: scalp.stopLoss
+      risk: scalp.risk
     }
   );
 
   return {
     pair: 'XAUUSD',
+
     signal: {
       action: scalp.direction,
       entry: scalp.entry,
@@ -734,13 +1141,21 @@ async function buildGoldScalpResult() {
         scalp.tp1,
         scalp.tp2
       ],
-      confidence: scalp.aiConfidence,
-      reason: `Gold Scalper ${scalp.grade} | Score ${scalp.score}/100`
+      confidence:
+        scalp.aiConfidence > 0
+          ? scalp.aiConfidence
+          : clamp(scalp.score, 0, 100),
+      reason:
+        `Gold Scalper ${scalp.grade} | ${scalp.entryMode} | Score ${scalp.score}/100`
     },
+
     indicators: {
       atr: scalp.atr5,
-      rsi: scalp.rsi5
+      rsi: scalp.rsi5,
+      ema9: scalp.ema9,
+      ema20: scalp.ema20
     },
+
     scalpMeta: scalp
   };
 }

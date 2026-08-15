@@ -5,7 +5,8 @@ const DEFAULTS = {
   breaking_news_enabled: '1',
   min_ai_confidence: '60',
   gold_max_risk_pct: '0.35',
-  maintenance_mode: '0'
+  maintenance_mode: '0',
+  free_daily_limit_enabled: '0'
 };
 
 function ensureTable() {

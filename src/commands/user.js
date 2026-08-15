@@ -1,4 +1,17 @@
 const { tByLang } = require('../utils/i18n');
+
+const {
+  addCopilotTrade,
+  getUserActiveCopilotTrade,
+  hasUsedCopilotTrial,
+  updateCopilotHealth,
+  stopUserCopilotTrades
+} = require('../database/copilotTrades');
+
+const {
+  evaluateCopilotTrade,
+  buildCopilotMessage
+} = require('../services/tradeCopilot');
 const config = require('../config');
 const { findUser } = require('../database/users');
 const {
@@ -13,8 +26,14 @@ const {
 const { adminV21Keyboard } = require('../keyboards/adminV21');
 const { plans, createVipRequest } = require('../services/vipService');
 const { analyzePair } = require('../services/analysisService');
+const { getCandles } = require('../services/marketService');
+const { calculateTradeLevels } = require('../services/tradeEngine');
 const { scanMarkets } = require('../services/smartScanner');
 const { Markup } = require('telegraf');
+const {
+  dailyUsageMiddleware
+} = require('../services/dailyUsageGate');
+
 const { runSignalLab } = require('../services/signalLab');
 const {
   getBestTrade,
@@ -66,10 +85,477 @@ function keyboard(ctx) {
     String(ctx.from?.id)
   );
 
+  const user = findUser(ctx.from?.id);
+
+  const isVip =
+    Boolean(user && user.is_vip);
+
   return mainKeyboard(
     languageOf(ctx),
-    isAdmin
+    isAdmin,
+    isVip
   );
+}
+
+
+
+function vipOfferText(ctx) {
+  if (isEnglish(ctx)) {
+    return `💎 FOREX AI — VIP
+━━━━━━━━━━━━━━━━━━
+
+Not just signals...
+Let the bot help you analyze your trading decision.
+
+🥇 Check Your Trade
+⚡ Real-time signals
+💰 Entry + SL + TP1 + TP2
+🏆 Best Opportunity
+🔎 Full Smart Scanner
+🔔 Personalized Alerts
+🤖 Opportunity Strength Rating
+📊 Automatic TP / SL Monitoring
+
+━━━━━━━━━━━━━━━━━━
+
+🔥 MOST POPULAR
+
+💎 1 Month
+$29.99
+
+💎 3 Months
+$74.99
+Save $15
+
+💎 1 Year
+$249.99
+Save $110
+
+👇 Choose your subscription plan`;
+  }
+
+  return `💎 FOREX AI — VIP
+━━━━━━━━━━━━━━━━━━
+
+مش مجرد إشارات...
+خلي البوت يساعدك في تحليل قرارك.
+
+🥇 اختبر صفقتك
+⚡ إشارات لحظية
+💰 Entry + SL + TP1 + TP2
+🏆 أفضل فرصة
+🔎 Smart Scanner كامل
+🔔 تنبيهات شخصية
+🤖 تقييم قوة الفرص
+📊 متابعة TP / SL تلقائيًا
+
+━━━━━━━━━━━━━━━━━━
+
+🔥 الأكثر اختيارًا
+
+💎 شهر
+$29.99
+
+💎 3 شهور
+$74.99
+وفر $15
+
+💎 سنة
+$249.99
+وفر $110
+
+👇 اختر خطة الاشتراك`;
+}
+
+function vipTradeAllowed(ctx) {
+  const user =
+    findUser(ctx.from?.id);
+
+  const adminIds =
+    (config.adminIds || [])
+      .map(String);
+
+  const isAdmin =
+    adminIds.includes(
+      String(ctx.from?.id)
+    );
+
+  return Boolean(
+    isAdmin ||
+    (user && user.is_vip)
+  );
+}
+
+function vipTradeTypeKeyboard(ctx) {
+  const en = isEnglish(ctx);
+
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        en ? '⚡ Scalping' : '⚡ سكالب',
+        'viptrade_type_scalp'
+      ),
+      Markup.button.callback(
+        en ? '📈 Intraday' : '📈 إنتراداي',
+        'viptrade_type_intraday'
+      )
+    ],
+    [
+      Markup.button.callback(
+        en ? '❌ Cancel' : '❌ إلغاء',
+        'viptrade_cancel'
+      )
+    ]
+  ]);
+}
+
+function vipTradeDirectionKeyboard(ctx, type) {
+  const en = isEnglish(ctx);
+
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        '📈 BUY',
+        `viptrade_${type}_buy`
+      ),
+      Markup.button.callback(
+        '📉 SELL',
+        `viptrade_${type}_sell`
+      )
+    ],
+    [
+      Markup.button.callback(
+        en ? '⬅️ Change type' : '⬅️ تغيير النوع',
+        'viptrade_home'
+      )
+    ]
+  ]);
+}
+
+function directionalMarketScore(
+  analysis,
+  selectedDirection
+) {
+  const indicators =
+    analysis?.indicators || {};
+
+  const ema20 =
+    Number(indicators.ema20);
+
+  const ema50 =
+    Number(indicators.ema50);
+
+  const rsi =
+    Number(indicators.rsi);
+
+  const adx =
+    Number(indicators.adx);
+
+  const macd =
+    Number(indicators.macd?.macd);
+
+  const macdSignal =
+    Number(indicators.macd?.signal);
+
+  const marketDirection =
+    analysis?.signal?.action === 'BUY' ||
+    analysis?.signal?.action === 'SELL'
+      ? analysis.signal.action
+      : (
+          Number.isFinite(ema20) &&
+          Number.isFinite(ema50)
+            ? (
+                ema20 >= ema50
+                  ? 'BUY'
+                  : 'SELL'
+              )
+            : 'WAIT'
+        );
+
+  let score = 0;
+
+  if (
+    selectedDirection ===
+    marketDirection
+  ) {
+    score += 35;
+  }
+
+  if (
+    Number.isFinite(ema20) &&
+    Number.isFinite(ema50)
+  ) {
+    if (
+      selectedDirection === 'BUY' &&
+      ema20 > ema50
+    ) score += 20;
+
+    if (
+      selectedDirection === 'SELL' &&
+      ema20 < ema50
+    ) score += 20;
+  }
+
+  if (Number.isFinite(rsi)) {
+    if (
+      selectedDirection === 'BUY' &&
+      rsi >= 50 &&
+      rsi <= 70
+    ) score += 15;
+
+    if (
+      selectedDirection === 'SELL' &&
+      rsi <= 50 &&
+      rsi >= 30
+    ) score += 15;
+  }
+
+  if (
+    Number.isFinite(macd) &&
+    Number.isFinite(macdSignal)
+  ) {
+    if (
+      selectedDirection === 'BUY' &&
+      macd > macdSignal
+    ) score += 15;
+
+    if (
+      selectedDirection === 'SELL' &&
+      macd < macdSignal
+    ) score += 15;
+  }
+
+  if (
+    Number.isFinite(adx) &&
+    adx >= 25
+  ) {
+    score += 15;
+  }
+
+  return {
+    score:
+      Math.max(
+        0,
+        Math.min(100, score)
+      ),
+
+    marketDirection
+  };
+}
+
+async function buildVipTradeCheck(
+  ctx,
+  type,
+  direction
+) {
+  const en =
+    isEnglish(ctx);
+
+  const timeframe =
+    type === 'scalp'
+      ? '5min'
+      : '15min';
+
+  const [
+    analysis,
+    candles
+  ] = await Promise.all([
+    analyzePair('XAUUSD'),
+    getCandles(
+      'XAUUSD',
+      timeframe
+    )
+  ]);
+
+  if (
+    !analysis ||
+    !Array.isArray(candles) ||
+    candles.length < 20
+  ) {
+    throw new Error(
+      'Insufficient market data'
+    );
+  }
+
+  const levels =
+    calculateTradeLevels(
+      candles,
+      direction,
+      'XAUUSD'
+    );
+
+  if (!levels) {
+    throw new Error(
+      'Unable to calculate trade levels'
+    );
+  }
+
+  const {
+    score,
+    marketDirection
+  } =
+    directionalMarketScore(
+      analysis,
+      direction
+    );
+
+  const confidence =
+    Number(
+      analysis?.signal?.confidence || 0
+    );
+
+  const sameDirection =
+    marketDirection === direction;
+
+  const entry =
+    Number(levels.entry);
+
+  const sl =
+    Number(
+      levels.sl ??
+      levels.stopLoss
+    );
+
+  const tp1 =
+    Number(
+      levels.tp1 ??
+      levels.target1
+    );
+
+  const tp2 =
+    Number(
+      levels.tp2 ??
+      levels.target2
+    );
+
+  const risk =
+    Number.isFinite(entry) &&
+    Number.isFinite(sl)
+      ? Math.abs(entry - sl)
+      : 0;
+
+  const rr1 =
+    risk > 0 &&
+    Number.isFinite(tp1)
+      ? Math.abs(tp1 - entry) / risk
+      : null;
+
+  const rr2 =
+    risk > 0 &&
+    Number.isFinite(tp2)
+      ? Math.abs(tp2 - entry) / risk
+      : null;
+
+  const fmt = value =>
+    Number.isFinite(Number(value))
+      ? Number(value).toFixed(2)
+      : '—';
+
+  let alignmentText;
+
+  if (!sameDirection) {
+    alignmentText = en
+      ? '🔴 Your trade is AGAINST the current market direction\n⚠️ Risk is currently higher.'
+      : '🔴 اختيارك عكس اتجاه السوق الحالي\n⚠️ المخاطرة حاليًا أعلى.';
+  }
+
+  else if (score >= 80 && confidence >= 70) {
+    alignmentText = en
+      ? '🔥 Strong confirmation\n✅ Your direction matches the market with strong technical + AI confirmation.'
+      : '🔥 تأكيد قوي\n✅ اختيارك مع اتجاه السوق ويوجد تأكيد فني وAI قوي.';
+  }
+
+  else if (score >= 70 && confidence >= 50) {
+    alignmentText = en
+      ? '🟢 Good confirmation\n✅ Your direction matches the market, but confirmation is not at the strongest level.'
+      : '🟢 تأكيد جيد\n✅ اختيارك مع اتجاه السوق، لكن التأكيد ليس في أقوى مستوياته.';
+  }
+
+  else if (score >= 60) {
+    alignmentText = en
+      ? '🟡 Direction matches the market, but confirmation is still moderate.\n⏳ Waiting for stronger confirmation may be better.'
+      : '🟡 الاتجاه متوافق مع السوق، لكن التأكيد ما زال متوسطًا.\n⏳ الانتظار لتأكيد أقوى قد يكون أفضل.';
+  }
+
+  else {
+    alignmentText = en
+      ? '🟠 Direction matches the market, but current confirmation is weak.\n⛔ This is not a strong entry confirmation right now.'
+      : '🟠 الاتجاه متوافق مع السوق، لكن التأكيد الحالي ضعيف.\n⛔ لا يوجد تأكيد قوي للدخول حاليًا.';
+  }
+
+  const typeText =
+    type === 'scalp'
+      ? (
+          en
+            ? '⚡ Scalping'
+            : '⚡ سكالب'
+        )
+      : (
+          en
+            ? '📈 Intraday'
+            : '📈 إنتراداي'
+        );
+
+  const marketText =
+    marketDirection === 'BUY'
+      ? '📈 BUY'
+      : marketDirection === 'SELL'
+        ? '📉 SELL'
+        : '⏳ WAIT';
+
+  if (en) {
+    return `🥇 VIP GOLD TRADE CHECK
+━━━━━━━━━━━━━━━━━━
+
+⚙️ Type: ${typeText}
+🎯 Your direction: ${direction}
+📊 Market direction: ${marketText}
+
+${alignmentText}
+
+━━━━━━━━━━━━━━━━━━
+💰 Entry: ${fmt(entry)}
+🛑 Stop Loss: ${fmt(sl)}
+🎯 TP1: ${fmt(tp1)}
+🏆 TP2: ${fmt(tp2)}
+
+⚖️ Risk / Reward
+TP1 → ${rr1 ? `1:${rr1.toFixed(2)}` : '—'}
+TP2 → ${rr2 ? `1:${rr2.toFixed(2)}` : '—'}
+
+━━━━━━━━━━━━━━━━━━
+⭐ Market Score: ${score}/100
+🤖 AI Confidence: ${Number.isFinite(confidence) ? confidence : 0}%
+⏱️ Analysis timeframe: ${timeframe}
+
+⚠️ Automated market analysis, not a guarantee of profit.`;
+  }
+
+  return `🥇 اختبار صفقة الذهب — VIP
+━━━━━━━━━━━━━━━━━━
+
+⚙️ نوع الصفقة: ${typeText}
+🎯 اختيارك: ${direction}
+📊 اتجاه السوق: ${marketText}
+
+${alignmentText}
+
+━━━━━━━━━━━━━━━━━━
+💰 الدخول: ${fmt(entry)}
+🛑 وقف الخسارة: ${fmt(sl)}
+🎯 الهدف الأول TP1: ${fmt(tp1)}
+🏆 الهدف الثاني TP2: ${fmt(tp2)}
+
+⚖️ العائد للمخاطرة
+TP1 → ${rr1 ? `1:${rr1.toFixed(2)}` : '—'}
+TP2 → ${rr2 ? `1:${rr2.toFixed(2)}` : '—'}
+
+━━━━━━━━━━━━━━━━━━
+⭐ قوة الصفقة: ${score}/100
+🤖 ثقة AI: ${Number.isFinite(confidence) ? confidence : 0}%
+⏱️ فريم التحليل: ${timeframe}
+
+⚠️ تحليل آلي لحالة السوق وليس ضمانًا للربح.`;
 }
 
 function assetKeyboard(ctx) {
@@ -579,7 +1065,99 @@ ${messages.join('\n━━━━━━━━━━━━━━━━━━\n\n')}
 📌 التشابه مع الحالات التاريخية مرجع تحليلي وليس ضمانًا للنتائج المستقبلية.`;
 }
 
+
+// =====================================================
+// TRADE COPILOT STATE
+// =====================================================
+
+const copilotDrafts = new Map();
+
+const copilotRefreshCooldowns = new Map();
+const copilotRefreshRunning = new Set();
+
+const COPILOT_REFRESH_COOLDOWN_MS =
+  Number(process.env.COPILOT_REFRESH_COOLDOWN_MS) ||
+  45 * 1000;
+
+function copilotRefreshAllowed(userId) {
+  const key = String(userId);
+  const last = copilotRefreshCooldowns.get(key) || 0;
+  const remaining =
+    COPILOT_REFRESH_COOLDOWN_MS -
+    (Date.now() - last);
+
+  return {
+    allowed: remaining <= 0,
+    remainingMs: Math.max(0, remaining)
+  };
+}
+
+
+
+function copilotAccess(ctx) {
+  const user = findUser(ctx.from?.id);
+
+  const isVip =
+    Boolean(user && Number(user.is_vip) === 1);
+
+  const usedTrial =
+    hasUsedCopilotTrial(ctx.from?.id);
+
+  return {
+    isVip,
+    usedTrial,
+    allowed:
+      isVip || !usedTrial,
+    isTrial:
+      !isVip && !usedTrial
+  };
+}
+
+
+
+function copilotDirectionKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        '📈 BUY',
+        'copilot_buy'
+      ),
+      Markup.button.callback(
+        '📉 SELL',
+        'copilot_sell'
+      )
+    ],
+    [
+      Markup.button.callback(
+        '❌ إلغاء',
+        'copilot_cancel'
+      )
+    ]
+  ]);
+}
+
+function copilotControlKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        '🔄 تحديث الآن',
+        'copilot_check_now'
+      )
+    ],
+    [
+      Markup.button.callback(
+        '🛑 إيقاف المتابعة',
+        'copilot_stop'
+      )
+    ]
+  ]);
+}
+
+
 function registerUserCommands(bot) {
+  // Free/VIP daily feature gate
+  bot.use(dailyUsageMiddleware());
+
 
   // MENU_UX_V3_HANDLERS
   bot.hears(['📊 السوق', '📊 Markets'], (ctx) => {
@@ -629,13 +1207,12 @@ function registerUserCommands(bot) {
     )
   );
 
-  bot.command('vip', (ctx) =>
-    ctx.reply(
-      `${isEnglish(ctx) ? 'Choose a VIP plan:' : 'اختر خطة VIP:'}\n\n${config.paymentInfo}`,
+  bot.command('vip', (ctx) => {
+    return ctx.reply(
+      vipOfferText(ctx),
       vipKeyboard()
-    )
-  );
-
+    );
+  });
   bot.command('ref', (ctx) => {
     const user = findUser(ctx.from.id);
     if (!user) {
@@ -853,13 +1430,216 @@ function registerUserCommands(bot) {
     }
   });
 
-  bot.hears('💎 VIP', (ctx) =>
-    ctx.reply(
-      `${isEnglish(ctx) ? 'Choose a VIP plan:' : 'اختر خطة VIP:'}\n\n${config.paymentInfo}`,
-      vipKeyboard()
-    )
+
+  // =====================================================
+  // VIP GOLD TRADE CHECKER
+  // =====================================================
+
+  bot.hears(
+    ['🥇 اختبر صفقتك', '🥇 Check Your Trade'],
+    async (ctx) => {
+      if (!vipTradeAllowed(ctx)) {
+        const promoText = isEnglish(ctx)
+          ? `🥇 CHECK YOUR TRADE
+━━━━━━━━━━━━━━━━━━
+
+Have a trade in mind but not sure whether to enter? 🤔
+
+Let the bot analyze your decision before entry and compare your direction with the current market.
+
+💎 With VIP you get:
+
+📊 Market direction alignment
+⭐ Trade strength
+🤖 Analysis confidence
+💰 Suggested entry
+🛑 Stop Loss
+🎯 TP1
+🏆 TP2
+⚖️ Risk / Reward
+
+━━━━━━━━━━━━━━━━━━
+
+🔒 Check Your Trade is available to VIP members.
+
+💎 VIP — $29.99 / month
+
+⚠️ Automated market analysis is a decision-support tool and does not guarantee profit.`
+          : `🥇 اختبر صفقتك
+━━━━━━━━━━━━━━━━━━
+
+عندك صفقة ومش متأكد تدخل ولا لأ؟ 🤔
+
+خلّي البوت يحلل قرارك قبل الدخول ويقارن اختيارك بحالة السوق الحالية.
+
+💎 مع VIP هتعرف:
+
+📊 هل اختيارك مع اتجاه السوق؟
+⭐ قوة الصفقة
+🤖 درجة توافق التحليل
+💰 سعر الدخول المقترح
+🛑 وقف الخسارة
+🎯 الهدف الأول TP1
+🏆 الهدف الثاني TP2
+⚖️ العائد مقابل المخاطرة
+
+━━━━━━━━━━━━━━━━━━
+
+🔒 أداة «اختبر صفقتك» متاحة لأعضاء VIP
+
+💎 VIP — $29.99 / شهر
+
+⚠️ التحليل آلي ومساعد لاتخاذ القرار، وليس ضمانًا للربح.`;
+
+        return ctx.reply(
+          promoText,
+          vipKeyboard()
+        );
+      }
+
+      return ctx.reply(
+        isEnglish(ctx)
+          ? '🥇 Choose your Gold trade type:'
+          : '🥇 اختر نوع صفقة الذهب:',
+        vipTradeTypeKeyboard(ctx)
+      );
+    }
   );
 
+  bot.action(
+    'viptrade_home',
+    async (ctx) => {
+      await ctx.answerCbQuery()
+        .catch(() => null);
+
+      if (!vipTradeAllowed(ctx)) {
+        return ctx.reply(
+          isEnglish(ctx)
+            ? '💎 VIP membership required.'
+            : '💎 يلزم اشتراك VIP.'
+        );
+      }
+
+      return ctx.editMessageText(
+        isEnglish(ctx)
+          ? '🥇 Choose your Gold trade type:'
+          : '🥇 اختر نوع صفقة الذهب:',
+        vipTradeTypeKeyboard(ctx)
+      ).catch(error => {
+        if (
+          String(
+            error?.response?.description ||
+            error?.message ||
+            ''
+          ).includes(
+            'message is not modified'
+          )
+        ) return;
+
+        throw error;
+      });
+    }
+  );
+
+  for (
+    const type of
+    ['scalp', 'intraday']
+  ) {
+    bot.action(
+      `viptrade_type_${type}`,
+      async (ctx) => {
+        await ctx.answerCbQuery()
+          .catch(() => null);
+
+        if (!vipTradeAllowed(ctx)) {
+          return ctx.reply(
+            isEnglish(ctx)
+              ? '💎 VIP membership required.'
+              : '💎 يلزم اشتراك VIP.'
+          );
+        }
+
+        return ctx.editMessageText(
+          isEnglish(ctx)
+            ? '📊 Choose your expected direction for XAUUSD:'
+            : '📊 اختر اتجاه صفقتك على XAUUSD:',
+          vipTradeDirectionKeyboard(
+            ctx,
+            type
+          )
+        );
+      }
+    );
+
+    for (
+      const direction of
+      ['buy', 'sell']
+    ) {
+      bot.action(
+        `viptrade_${type}_${direction}`,
+        async (ctx) => {
+          await ctx.answerCbQuery(
+            isEnglish(ctx)
+              ? 'Analyzing...'
+              : 'جاري التحليل...'
+          ).catch(() => null);
+
+          if (!vipTradeAllowed(ctx)) {
+            return ctx.reply(
+              isEnglish(ctx)
+                ? '💎 VIP membership required.'
+                : '💎 يلزم اشتراك VIP.'
+            );
+          }
+
+          try {
+            const result =
+              await buildVipTradeCheck(
+                ctx,
+                type,
+                direction.toUpperCase()
+              );
+
+            return ctx.reply(
+              result,
+              keyboard(ctx)
+            );
+
+          } catch (error) {
+            console.log(
+              'VIP trade checker error:',
+              error.stack ||
+              error.message
+            );
+
+            return ctx.reply(
+              isEnglish(ctx)
+                ? '❌ Could not complete the Gold trade analysis right now.'
+                : '❌ تعذر إكمال تحليل صفقة الذهب حاليًا.'
+            );
+          }
+        }
+      );
+    }
+  }
+
+  bot.action(
+    'viptrade_cancel',
+    async (ctx) => {
+      await ctx.answerCbQuery()
+        .catch(() => null);
+
+      return ctx.deleteMessage()
+        .catch(() => null);
+    }
+  );
+
+  bot.hears('💎 VIP', (ctx) => {
+    return ctx.reply(
+      vipOfferText(ctx),
+      vipKeyboard()
+    );
+  });
   bot.hears('🔗 الإحالة', (ctx) => {
     const user = findUser(ctx.from.id);
     if (!user) {
@@ -1050,6 +1830,424 @@ ${caption || 'لا يوجد'}`;
       keyboard(ctx)
     );
   });
+
+
+  // =====================================================
+  // COPILOT FEATURE HANDLERS
+  // =====================================================
+
+  bot.hears(
+    ['🤖 راقب صفقتي', '🤖 Monitor My Trade'],
+    async (ctx) => {
+      const existing =
+        getUserActiveCopilotTrade(ctx.from.id);
+
+      // Existing active trade can always be opened
+      // so the user can check or stop it.
+      if (!existing) {
+        const access =
+          copilotAccess(ctx);
+
+        if (!access.allowed) {
+          return ctx.reply(
+`🤖 AI TRADE COPILOT — VIP
+━━━━━━━━━━━━━━━━━━
+
+خلي البوت يراقب صفقتك معاك تلقائيًا:
+
+📊 اتجاه السوق
+⚡ الزخم
+📍 حالة الدخول
+📈 EMA
+📊 RSI
+💪 ADX
+🎯 VWAP
+🔔 تنبيه عند تغير حالة الصفقة
+
+━━━━━━━━━━━━━━━━━━
+
+🎁 استخدمت تجربتك المجانية بالفعل.
+
+🔒 المتابعة المستمرة متاحة لأعضاء VIP.
+
+💎 VIP — $29.99 / شهر`,
+            vipKeyboard()
+          );
+        }
+
+        if (access.isTrial) {
+          await ctx.reply(
+`🎁 تجربة مجانية — Trade Copilot
+
+دي تجربتك المجانية الوحيدة للميزة.
+
+🤖 البوت هيراقب صفقة XAUUSD معاك
+وينبهك لما حالتها الفنية تتغير.
+
+بعد انتهاء هذه المتابعة، الميزة ستكون متاحة من خلال VIP.`
+          );
+        }
+      }
+
+      if (existing) {
+        return ctx.reply(
+          `🤖 عندك صفقة تحت المتابعة بالفعل.
+
+🥇 XAUUSD
+${existing.action === 'BUY' ? '📈' : '📉'} ${existing.action}
+
+🎯 الدخول:
+${Number(existing.entry).toFixed(2)}
+
+📊 الحالة:
+${existing.health_status || 'NEW'}`,
+          copilotControlKeyboard()
+        );
+      }
+
+      copilotDrafts.set(
+        String(ctx.from.id),
+        { step: 'direction' }
+      );
+
+      return ctx.reply(
+        `🤖 AI TRADE COPILOT
+
+🥇 XAUUSD
+
+اختر اتجاه صفقتك:`,
+        copilotDirectionKeyboard()
+      );
+    }
+  );
+
+
+  bot.action('copilot_buy', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => null);
+
+    const existing =
+      getUserActiveCopilotTrade(ctx.from.id);
+
+    if (!existing) {
+      const access =
+        copilotAccess(ctx);
+
+      if (!access.allowed) {
+        return ctx.reply(
+          '🔒 انتهت تجربتك المجانية لـ Trade Copilot. يلزم اشتراك VIP لاستخدام الميزة مرة أخرى.',
+          vipKeyboard()
+        );
+      }
+    }
+
+    copilotDrafts.set(
+      String(ctx.from.id),
+      {
+        step: 'entry',
+        action: 'BUY'
+      }
+    );
+
+    return ctx.reply(
+      `📈 BUY
+
+🎯 ابعت سعر دخولك فقط.
+
+مثال:
+4375.50`
+    );
+  });
+
+
+  bot.action('copilot_sell', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => null);
+
+    const existing =
+      getUserActiveCopilotTrade(ctx.from.id);
+
+    if (!existing) {
+      const access =
+        copilotAccess(ctx);
+
+      if (!access.allowed) {
+        return ctx.reply(
+          '🔒 انتهت تجربتك المجانية لـ Trade Copilot. يلزم اشتراك VIP لاستخدام الميزة مرة أخرى.',
+          vipKeyboard()
+        );
+      }
+    }
+
+    copilotDrafts.set(
+      String(ctx.from.id),
+      {
+        step: 'entry',
+        action: 'SELL'
+      }
+    );
+
+    return ctx.reply(
+      `📉 SELL
+
+🎯 ابعت سعر دخولك فقط.
+
+مثال:
+4375.50`
+    );
+  });
+
+
+  bot.action('copilot_cancel', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => null);
+
+    copilotDrafts.delete(
+      String(ctx.from.id)
+    );
+
+    return ctx.reply(
+      '❌ تم إلغاء إعداد Trade Copilot.'
+    );
+  });
+
+
+  bot.action('copilot_stop', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => null);
+
+    stopUserCopilotTrades(
+      ctx.from.id
+    );
+
+    copilotDrafts.delete(
+      String(ctx.from.id)
+    );
+
+    return ctx.reply(
+      '🛑 تم إيقاف متابعة الصفقة.'
+    );
+  });
+
+
+  bot.action(
+    'copilot_check_now',
+    async (ctx) => {
+      await ctx.answerCbQuery().catch(() => null);
+
+      const userId =
+        String(ctx.from?.id || '');
+
+      if (!userId) {
+        return;
+      }
+
+      // Prevent the same user from starting
+      // multiple concurrent analyses.
+      if (copilotRefreshRunning.has(userId)) {
+        return ctx.reply(
+          '⏳ التحليل شغال بالفعل، انتظر النتيجة.'
+        );
+      }
+
+      const cooldown =
+        copilotRefreshAllowed(userId);
+
+      if (!cooldown.allowed) {
+        const seconds =
+          Math.max(
+            1,
+            Math.ceil(
+              cooldown.remainingMs / 1000
+            )
+          );
+
+        return ctx.reply(
+          `⏳ آخر تحديث ما زال حديثًا.
+
+يمكنك طلب تحديث جديد بعد ${seconds} ثانية.
+
+🤖 المتابعة التلقائية مستمرة في الخلفية.`
+        );
+      }
+
+      const trade =
+        getUserActiveCopilotTrade(
+          ctx.from.id
+        );
+
+      if (!trade) {
+        return ctx.reply(
+          'ℹ️ لا توجد صفقة تحت المتابعة حاليًا.'
+        );
+      }
+
+      copilotRefreshRunning.add(userId);
+
+      // Start cooldown BEFORE external work,
+      // so repeated taps cannot create a burst.
+      copilotRefreshCooldowns.set(
+        userId,
+        Date.now()
+      );
+
+      try {
+        const result =
+          await evaluateCopilotTrade(trade);
+
+        updateCopilotHealth(
+          trade.id,
+          result.healthStatus,
+          result.currentPrice,
+          result.score,
+          [
+            ...result.critical,
+            ...result.warnings
+          ].slice(0, 3).join(' | ')
+        );
+
+        return ctx.reply(
+          buildCopilotMessage(
+            trade,
+            result,
+            trade.health_status
+          ),
+          copilotControlKeyboard()
+        );
+
+      } catch (error) {
+        console.log(
+          '❌ Copilot manual check:',
+          error.message
+        );
+
+        return ctx.reply(
+          '❌ تعذر تحديث التحليل حاليًا. المتابعة التلقائية ما زالت تعمل.'
+        );
+
+      } finally {
+        copilotRefreshRunning.delete(userId);
+      }
+    }
+  );
+
+
+  bot.on('text', async (ctx, next) => {
+
+    const userId =
+      String(ctx.from?.id || '');
+
+    const draft =
+      copilotDrafts.get(userId);
+
+    if (
+      !draft ||
+      draft.step !== 'entry'
+    ) {
+      return typeof next === 'function'
+        ? next()
+        : undefined;
+    }
+
+    const raw =
+      String(ctx.message?.text || '')
+        .trim()
+        .replace(',', '.');
+
+    const entry =
+      Number(raw);
+
+    if (
+      !Number.isFinite(entry) ||
+      entry < 1000 ||
+      entry > 10000
+    ) {
+      return ctx.reply(
+        `❌ السعر غير صحيح.
+
+ابعت سعر الذهب فقط.
+
+مثال:
+4375.50`
+      );
+    }
+
+    const action = draft.action;
+
+    copilotDrafts.delete(userId);
+
+    stopUserCopilotTrades(
+      ctx.from.id
+    );
+
+    addCopilotTrade({
+      telegram_id: ctx.from.id,
+      action,
+      entry
+    });
+
+    const trade =
+      getUserActiveCopilotTrade(
+        ctx.from.id
+      );
+
+    if (!trade) {
+      return ctx.reply(
+        '❌ تعذر تشغيل متابعة الصفقة.'
+      );
+    }
+
+    await ctx.reply(
+      `🤖 بدأت متابعة صفقتك
+
+🥇 XAUUSD
+${action === 'BUY' ? '📈' : '📉'} ${action}
+
+🎯 دخولك:
+${entry.toFixed(2)}
+
+🧠 جاري تحليل السوق...`
+    );
+
+    try {
+
+      const result =
+        await evaluateCopilotTrade(trade);
+
+      updateCopilotHealth(
+        trade.id,
+        result.healthStatus,
+        result.currentPrice,
+        result.score,
+        [
+          ...result.critical,
+          ...result.warnings
+        ].slice(0, 3).join(' | ')
+      );
+
+      return ctx.reply(
+        buildCopilotMessage(
+          trade,
+          result,
+          'NEW'
+        ),
+        copilotControlKeyboard()
+      );
+
+    } catch (error) {
+
+      console.log(
+        '❌ Copilot initial analysis:',
+        error.message
+      );
+
+      return ctx.reply(
+        `✅ المتابعة مفعلة.
+
+⚠️ تعذر أول تحليل للسوق مؤقتًا.
+سيحاول البوت تلقائيًا مرة أخرى.`,
+        copilotControlKeyboard()
+      );
+    }
+  });
+
+
 }
 
 module.exports = registerUserCommands;
