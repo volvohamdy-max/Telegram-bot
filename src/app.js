@@ -11,6 +11,7 @@ const registerTrendHunter = require('./commands/trendHunter');
 const registerOpportunityRadar = require('./commands/opportunityRadar');
 const registerAdaptiveIntelligence = require('./commands/adaptiveIntelligence');
 const registerShadowAudit = require('./commands/shadowAudit');
+const registerReport14 = require('./commands/report14');
 const registerAlerts = require('./commands/alerts');
 const registerSettings = require('./commands/settings');
 const registerAdminCommands = require('./admin/adminCommands');
@@ -79,6 +80,7 @@ async function main() {
   registerOpportunityRadar(bot);
   registerAdaptiveIntelligence(bot);
   registerShadowAudit(bot);
+  registerReport14(bot);
   registerMarketMap(bot);
   registerSlashCommands(bot);
   registerUserCommands(bot);

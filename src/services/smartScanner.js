@@ -1,3 +1,4 @@
+const { isPairMarketOpen } = require('../utils/marketHours');
 const { analyzePair } = require('./analysisGate');
 const { evaluateScalpEntry } = require('./scalpingEntryEngine');
 
@@ -279,6 +280,13 @@ async function scanMarkets() {
     const results = [];
 
     for (const pair of SCANNER_PAIRS) {
+
+        if (!isPairMarketOpen(pair)) {
+            console.log(
+                `🌙 Market closed — scanner skipped ${pair}`
+            );
+            continue;
+        }
 
         try {
 
