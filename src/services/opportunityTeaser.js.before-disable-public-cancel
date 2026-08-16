@@ -133,8 +133,8 @@ async function runOpportunityTeaser(bot) {
 
 🥇 ${pair}
 
-📡 حالة السوق:
-نشاط قوي قيد المراقبة
+🧭 الميل الحالي:
+${directionText(direction)}
 
 █████░ 5/6
 
@@ -143,7 +143,7 @@ ${Number(row.score || 0).toFixed(0)}/100
 
 ⏳ باقي شرط واحد فقط قبل التأكيد الفني.
 
-🔒 اتجاه الصفقة
+🔒 اتجاه التنفيذ النهائي
 🔒 Entry
 🔒 Stop Loss
 🔒 TP1
@@ -200,13 +200,23 @@ ${Number(row.score || 0).toFixed(0)}/100
       effectiveState === 'CANCELLED' &&
       previousState !== 'CANCELLED'
     ) {
-      // Keep CANCELLED state internally,
-      // but do not spam the public group.
-      message = null;
+      message =
+`⚠️ الفرصة السابقة لم تكتمل
+━━━━━━━━━━━━━━━━━━
 
-      console.log(
-        `🔕 PUBLIC CANCEL SUPPRESSED | ${pair}`
-      );
+🥇 ${pair}
+
+📡 الرادار ألغى الفرصة قبل إصدار إشارة دخول مؤكدة.
+
+${
+  directionChanged
+    ? '🔄 تغيّر اتجاه السوق قبل اكتمال التأكيد.'
+    : '📉 فقدت الفرصة عددًا من شروط التأكيد.'
+}
+
+✅ لم يتم إصدار صفقة.
+
+FOREX AI يستمر في مراقبة السوق تلقائيًا.`;
     }
 
 

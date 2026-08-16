@@ -1,7 +1,6 @@
 const axios = require('axios');
 const config = require('../config');
 const { getCache, setCache } = require('./candleCache');
-const { isPairMarketOpen } = require('../utils/marketHours');
 
 const SUPPORTED_PAIRS = new Set([
   'XAUUSD','BTCUSD','EURUSD','GBPUSD',
@@ -557,12 +556,6 @@ function sanityPrice(pair, candidate) {
 async function getPrice(pair) {
   const key = assertSupportedPair(pair);
 
-  if (!isPairMarketOpen(key)) {
-    throw new Error(
-      `MARKET_CLOSED_WEEKEND: ${key}`
-    );
-  }
-
   const fresh = freshPrice(key);
   if (fresh) {
     console.log(`💰 Price cache: ${key} | ${fresh.provider}`);
@@ -1079,12 +1072,6 @@ function candlePlan(pair) {
 async function getCandles(pair, interval = '15min') {
   const symbol =
     assertSupportedPair(pair);
-
-  if (!isPairMarketOpen(symbol)) {
-    throw new Error(
-      `MARKET_CLOSED_WEEKEND: ${symbol}`
-    );
-  }
 
   const tf =
     String(interval || '15min');

@@ -20,7 +20,6 @@ const { getBoolSetting: getAdminBoolSetting } = require('./database/adminControl
 const startScheduler = require('./services/scheduler');
 const { startBreakingNews } = require('./services/breakingNewsService');
 const languageRouter = require('./utils/languageRouter');
-const registerVirtualPortfolio = require('./commands/virtualPortfolio');
 
 async function main() {
   console.log('Starting Telegram Forex AI bot...');
@@ -101,8 +100,6 @@ async function main() {
   console.log('Scheduler started.');
 
   try {
-registerVirtualPortfolio(bot);
-
     await bot.launch();
     console.log('Telegram Forex AI bot is running. Open Telegram and send /start.');
   } catch (error) {
